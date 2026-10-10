@@ -10,18 +10,19 @@ export default function App() {
     ]
   });
 
-  const [mapImage, setMapImage] = useState(null);
-  const fileInputRef = useRef(null);
-
+  const [maps, setMaps] = useState([]);
+  const [isMapsLocked, setIsMapsLocked] = useState(false);
   const [tokenSize, setTokenSize] = useState(50);
+  const fileInputRef = useRef(null);
 
   const [dragState, setDragState] = useState({
     isDragging: false,
-    tokenId: null,
+    type: null, // 'token' o 'map'
+    id: null,
     startX: 0,
     startY: 0,
-    initialTokenX: 0,
-    initialTokenY: 0
+    initialX: 0,
+    initialY: 0
   });
 
   const [viewport, setViewport] = useState({ scale: 1, x: 0, y: 0 });
@@ -30,29 +31,53 @@ export default function App() {
 
   const handleTokenPointerDown = (e, token) => {
     e.stopPropagation();
-    e.target.setPointerCapture(e.pointerId);
+    try { e.target.setPointerCapture(e.pointerId); } catch (err) {}
     setDragState({
-      isDragging: true, tokenId: token.id, startX: e.clientX, startY: e.clientY,
-      initialTokenX: token.x, initialTokenY: token.y
+      isDragging: true, type: 'token', id: token.id, startX: e.clientX, startY: e.clientY,
+      initialX: token.x, initialY: token.y
+    });
+  };
+
+  const handleMapItemPointerDown = (e, map) => {
+    if (isMapsLocked) return; 
+    e.stopPropagation();
+    try { e.target.setPointerCapture(e.pointerId); } catch (err) {}
+    
+    // Mover el mapa seleccionado al frente
+    setMaps(prev => {
+      const filtered = prev.filter(m => m.id !== map.id);
+      return [...filtered, map];
+    });
+
+    setDragState({
+      isDragging: true, type: 'map', id: map.id, startX: e.clientX, startY: e.clientY,
+      initialX: map.x, initialY: map.y
     });
   };
 
   const handleMapPointerDown = (e) => {
-    e.target.setPointerCapture(e.pointerId);
+    try { e.target.setPointerCapture(e.pointerId); } catch (err) {}
     setIsPanning(true);
     setPanStart({ x: e.clientX, y: e.clientY });
   };
 
   const handlePointerMove = (e) => {
-    if (dragState.isDragging && dragState.tokenId !== null) {
+    if (dragState.isDragging && dragState.id !== null) {
       const dx = (e.clientX - dragState.startX) / viewport.scale;
       const dy = (e.clientY - dragState.startY) / viewport.scale;
-      setGameState(prev => ({
-        ...prev,
-        tokens: prev.tokens.map(t => 
-          t.id === dragState.tokenId ? { ...t, x: dragState.initialTokenX + dx, y: dragState.initialTokenY + dy } : t
-        )
-      }));
+      
+      if (dragState.type === 'token') {
+        setGameState(prev => ({
+          ...prev,
+          tokens: prev.tokens.map(t => 
+            t.id === dragState.id ? { ...t, x: dragState.initialX + dx, y: dragState.initialY + dy } : t
+          )
+        }));
+      } else if (dragState.type === 'map') {
+        setMaps(prev => prev.map(m => 
+          m.id === dragState.id ? { ...m, x: dragState.initialX + dx, y: dragState.initialY + dy } : m
+        ));
+      }
     } else if (isPanning) {
       const dx = e.clientX - panStart.x;
       const dy = e.clientY - panStart.y;
@@ -62,7 +87,9 @@ export default function App() {
   };
 
   const handlePointerUp = () => {
-    if (dragState.isDragging) setDragState({ isDragging: false, tokenId: null, startX: 0, startY: 0, initialTokenX: 0, initialTokenY: 0 });
+    if (dragState.isDragging) {
+      setDragState({ isDragging: false, type: null, id: null, startX: 0, startY: 0, initialX: 0, initialY: 0 });
+    }
     if (isPanning) setIsPanning(false);
   };
 
@@ -70,7 +97,7 @@ export default function App() {
     const zoomSensitivity = 0.001;
     const delta = e.deltaY * -zoomSensitivity;
     let newScale = viewport.scale * Math.exp(delta);
-    newScale = Math.max(0.1, Math.min(newScale, 5));
+    newScale = Math.max(0.1, Math.min(newScale, 5)); // Límites de zoom
     
     const mouseX = e.clientX;
     const mouseY = e.clientY;
@@ -86,71 +113,82 @@ export default function App() {
     const file = e.target.files[0];
     if (file) {
       const reader = new FileReader();
-      reader.onload = (event) => setMapImage(event.target.result);
+      reader.onload = (event) => {
+        const centerX = -viewport.x / viewport.scale + (window.innerWidth / 2) / viewport.scale;
+        const centerY = -viewport.y / viewport.scale + (window.innerHeight / 2) / viewport.scale;
+
+        const newMap = {
+          id: Date.now(),
+          url: event.target.result,
+          x: centerX - 250, 
+          y: centerY - 250
+        };
+        setMaps(prev => [...prev, newMap]);
+      };
       reader.readAsDataURL(file);
     }
+    if (e.target) e.target.value = ''; 
   };
 
   return (
-    <>
-      {/* Inyectamos CSS global para eliminar márgenes y scroll del navegador */}
-      <style>{`
-        body, html {
-          margin: 0;
-          padding: 0;
-          overflow: hidden;
-          width: 100%;
-          height: 100%;
-        }
-        #root {
-          width: 100%;
-          height: 100%;
-        }
-      `}</style>
+    <div 
+      style={{ 
+        position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', 
+        overflow: 'hidden', backgroundColor: '#1a202c', touchAction: 'none', margin: 0, padding: 0
+      }}
+      onPointerDown={handleMapPointerDown} onPointerMove={handlePointerMove} 
+      onPointerUp={handlePointerUp} onPointerLeave={handlePointerUp} onWheel={handleWheel}
+    >
+      <Toolbar 
+        onUploadClick={() => fileInputRef.current?.click()} 
+        fileInputRef={fileInputRef} 
+        onMapUpload={handleMapUpload}
+        tokenSize={tokenSize}
+        setTokenSize={setTokenSize}
+        isMapsLocked={isMapsLocked}
+        setIsMapsLocked={setIsMapsLocked}
+      />
 
       <div 
-        style={{ position: 'relative', width: '100%', height: '100%', overflow: 'hidden', backgroundColor: '#1a202c', touchAction: 'none' }}
-        onPointerDown={handleMapPointerDown} onPointerMove={handlePointerMove} onPointerUp={handlePointerUp} onWheel={handleWheel}
+        style={{
+          position: 'absolute', transformOrigin: '0 0',
+          transform: `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.scale})`,
+          width: '100%', height: '100%', willChange: 'transform'
+        }}
       >
-        
-        {/* 1. Capa de UI (Barra de herramientas, menús) */}
-        <Toolbar 
-          onUploadClick={() => fileInputRef.current.click()} 
-          fileInputRef={fileInputRef} 
-          onMapUpload={handleMapUpload}
-          tokenSize={tokenSize}
-          setTokenSize={setTokenSize}
-        />
+        {maps.length === 0 && (
+          <div style={{ position: 'absolute', top: '50vh', left: '50vw', transform: 'translate(-50%, -50%)', color: 'white', fontSize: 20, opacity: 0.5, pointerEvents: 'none' }}>
+            Carga uno o varios mapas para comenzar
+          </div>
+        )}
 
-        {/* 2. Capa Virtual (La cámara que se mueve y hace zoom) */}
-        <div 
-          style={{
-            position: 'absolute', transformOrigin: '0 0',
-            transform: `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.scale})`,
-            width: '100%', height: '100%', willChange: 'transform'
-          }}
-        >
-          {/* Fondo del Mapa */}
-          {mapImage ? (
-            <img src={mapImage} alt="Mapa" style={{ position: 'absolute', top: 0, left: 0, pointerEvents: 'none' }} draggable="false" />
-          ) : (
-            <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', color: 'white', fontSize: 20, opacity: 0.5 }}>
-              Carga un mapa para comenzar
-            </div>
-          )}
+        {maps.map((map) => (
+          <img 
+            key={map.id}
+            src={map.url} 
+            alt="Sección del mapa" 
+            onPointerDown={(e) => handleMapItemPointerDown(e, map)}
+            style={{ 
+              position: 'absolute', top: map.y, left: map.x, 
+              cursor: isMapsLocked ? 'default' : (dragState.type === 'map' && dragState.id === map.id ? 'grabbing' : 'grab'),
+              boxShadow: isMapsLocked ? 'none' : '0 10px 25px rgba(0,0,0,0.5)',
+              border: isMapsLocked ? 'none' : '2px dashed rgba(255,255,255,0.4)',
+              zIndex: dragState.type === 'map' && dragState.id === map.id ? 50 : 0
+            }} 
+            draggable="false" 
+          />
+        ))}
 
-          {/* Mapeo de Tokens */}
-          {gameState.tokens.map((token) => (
-            <GameToken 
-              key={token.id} 
-              token={token}
-              isDragging={dragState.tokenId === token.id}
-              onPointerDown={handleTokenPointerDown}
-              size={tokenSize}
-            />
-          ))}
-        </div>
+        {gameState.tokens.map((token) => (
+          <GameToken 
+            key={token.id} 
+            token={token}
+            isDragging={dragState.type === 'token' && dragState.id === token.id}
+            onPointerDown={handleTokenPointerDown}
+            size={tokenSize}
+          />
+        ))}
       </div>
-    </>
+    </div>
   );
 }

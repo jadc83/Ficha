@@ -1,12 +1,11 @@
-import { Map, Settings, Minus, Plus } from 'lucide-react';
+import { Map, Settings, Minus, Plus, Lock, Unlock } from 'lucide-react';
 import { useState } from 'react';
 
-const Toolbar = ({ onUploadClick, fileInputRef, onMapUpload, tokenSize, setTokenSize }) => {
+const Toolbar = ({ onUploadClick, fileInputRef, onMapUpload, tokenSize, setTokenSize, isMapsLocked, setIsMapsLocked }) => {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
   return (
     <>
-      {/* Input oculto movido aquí junto a sus botones */}
       <input 
         type="file" 
         accept="image/*" 
@@ -14,7 +13,15 @@ const Toolbar = ({ onUploadClick, fileInputRef, onMapUpload, tokenSize, setToken
         onChange={onMapUpload} 
         style={{ display: 'none' }} 
       />
-      <div style={{ position: 'absolute', top: 16, left: 16, zIndex: 10, display: 'flex', gap: '8px' }}>
+      
+      {/* Añadimos stopPropagation a este div principal de la UI */}
+      <div 
+        onPointerDown={(e) => e.stopPropagation()}
+        onWheel={(e) => e.stopPropagation()}
+        style={{ position: 'absolute', top: 16, left: 16, zIndex: 10, display: 'flex', gap: '8px' }}
+      >
+        
+        {/* Botón de Cargar Mapa */}
         <button 
           onClick={onUploadClick}
           style={{ 
@@ -23,9 +30,25 @@ const Toolbar = ({ onUploadClick, fileInputRef, onMapUpload, tokenSize, setToken
             boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)'
           }}
         >
-          <Map size={18} /> Cargar Mapa
+          <Map size={18} /> Añadir Mapa
+        </button>
+
+        {}
+        <button 
+          onClick={() => setIsMapsLocked(!isMapsLocked)}
+          style={{ 
+            padding: '8px 16px', 
+            background: isMapsLocked ? '#ef4444' : '#10b981', 
+            color: 'white', borderRadius: '6px', 
+            border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px',
+            boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)'
+          }}
+        >
+          {isMapsLocked ? <Lock size={18} /> : <Unlock size={18} />} 
+          {isMapsLocked ? 'Mapas Bloqueados' : 'Mapas Libres'}
         </button>
         
+        {}
         <div style={{ position: 'relative' }}>
           <button 
             onClick={() => setIsSettingsOpen(!isSettingsOpen)}
