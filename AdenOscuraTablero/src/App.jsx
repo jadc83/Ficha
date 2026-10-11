@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import TokenSidebar from './components/TokenSidebar';
 import GameToken from './components/GameToken';
 import Toolbar from './components/Toolbar';
@@ -11,8 +11,8 @@ const App = () => {
   
   const [tokens, setTokens] = useState([]);
   const [characters, setCharacters] = useState([]);
-  const [tokenSize, setTokenSize] = useState(50);
   const [isCharModalOpen, setIsCharModalOpen] = useState(false);
+  const [showNames, setShowNames] = useState(true);
 
   const [scale, setScale] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
@@ -23,6 +23,24 @@ const App = () => {
   const [lastMousePos, setLastMousePos] = useState({ x: 0, y: 0 });
   const fileInputRef = useRef(null);
   const charFileInputRef = useRef(null);
+  const mapMenuRef = useRef(null);
+
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (mapMenuRef.current && !mapMenuRef.current.contains(e.target)) {
+        setMapContextMenu(prev => ({ ...prev, visible: false }));
+      }
+    };
+
+    if (mapContextMenu.visible) {
+      // Añadimos 'true' para usar la fase de captura
+      document.addEventListener('pointerdown', handleClickOutside, true);
+    }
+    return () => {
+      // Añadimos 'true' aquí también para limpiarlo correctamente
+      document.removeEventListener('pointerdown', handleClickOutside, true);
+    };
+  }, [mapContextMenu.visible]);
 
   const handleExportCharacters = () => {
     // Convierte el array de personajes a un string JSON formateado
@@ -70,7 +88,8 @@ const App = () => {
       color: character.color,
       x: window.innerWidth / 2 - offset.x,
       y: window.innerHeight / 2 - offset.y,
-      isLocked: false
+      isLocked: false,
+      size: 50 // Asignamos tamaño base
     }]);
   };
 
@@ -81,6 +100,12 @@ const App = () => {
   const toggleTokenLock = (tokenId) => {
     setTokens(prev => prev.map(token => 
       token.id === tokenId ? { ...token, isLocked: !token.isLocked } : token
+    ));
+  };
+
+  const handleUpdateTokenSize = (tokenId, newSize) => {
+    setTokens(prev => prev.map(token => 
+      token.id === tokenId ? { ...token, size: newSize } : token
     ));
   };
 
@@ -226,6 +251,8 @@ const App = () => {
           onRemoveCharacter={handleRemoveCharacter}
           onExportCharacters={handleExportCharacters}
           onImportClick={() => charFileInputRef.current?.click()}
+          showNames={showNames}
+          setShowNames={setShowNames}
         />
 
         {/* Zona del Tablero */}
@@ -235,8 +262,6 @@ const App = () => {
             onUploadClick={() => fileInputRef.current?.click()}
             fileInputRef={fileInputRef}
             onMapUpload={handleMapUpload}
-            tokenSize={tokenSize}
-            setTokenSize={setTokenSize}
             isMapsLocked={isMapsLocked}
             setIsMapsLocked={setIsMapsLocked}
           />
@@ -287,9 +312,10 @@ const App = () => {
                 <GameToken 
                   key={token.id} 
                   token={token}
-                  size={tokenSize}
+                  showNames={showNames}
                   isDragging={draggedToken === token.id}
                   onToggleLock={toggleTokenLock}
+                  onUpdateSize={handleUpdateTokenSize}
                   onPointerDown={(e) => {
                     e.stopPropagation();
                     setDraggedToken(token.id);
@@ -303,6 +329,7 @@ const App = () => {
 
           {mapContextMenu.visible && (
             <div 
+              ref={mapMenuRef}
               style={{
                 position: 'fixed', top: `${mapContextMenu.y}px`, left: `${mapContextMenu.x}px`,
                 backgroundColor: '#1f2937', border: '1px solid #374151', borderRadius: '6px',

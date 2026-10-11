@@ -1,20 +1,38 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 
-const GameToken = ({ token, isDragging, onPointerDown, onToggleLock, size = 50 }) => {
-  const [isMenuOpen, setIsMenuOpen] = useState(false);
+const GameToken = ({ token, isDragging, onPointerDown, onToggleLock, onUpdateSize, showNames }) => {
+  const [menuState, setMenuState] = useState({ visible: false, x: 0, y: 0 });
+  const menuRef = useRef(null);
+  const currentSize = token.size || 50;
+
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (menuRef.current && !menuRef.current.contains(e.target)) {
+        setMenuState(prev => ({ ...prev, visible: false }));
+      }
+    };
+
+    if (menuState.visible) {
+      document.addEventListener('pointerdown', handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener('pointerdown', handleClickOutside);
+    };
+  }, [menuState.visible]);
 
   const handleContextMenu = (e) => {
-    e.preventDefault(); // Evita que salga el menú por defecto del navegador
+    e.preventDefault();
     e.stopPropagation();
-    setIsMenuOpen(true);
+    setMenuState({ visible: true, x: e.clientX, y: e.clientY });
   };
 
   const handlePointerDown = (e) => {
-    if (isMenuOpen) setIsMenuOpen(false); // Cierra el menú si se hace clic
+    if (menuState.visible) setMenuState({ visible: false, x: 0, y: 0 });
     if (!token.isLocked) {
       onPointerDown(e, token);
     } else {
-      e.stopPropagation(); // Evita que mueva el mapa si está bloqueado
+      e.stopPropagation();
     }
   };
 
@@ -26,8 +44,8 @@ const GameToken = ({ token, isDragging, onPointerDown, onToggleLock, size = 50 }
         position: 'absolute',
         left: `${token.x}px`,
         top: `${token.y}px`,
-        width: `${size}px`,
-        height: `${size}px`,
+        width: `${currentSize}px`,
+        height: `${currentSize}px`,
         backgroundColor: token.color,
         borderRadius: '50%',
         cursor: token.isLocked ? 'not-allowed' : (isDragging ? 'grabbing' : 'grab'),
@@ -39,31 +57,42 @@ const GameToken = ({ token, isDragging, onPointerDown, onToggleLock, size = 50 }
         justifyContent: 'center'
       }}
     >
-      {/* Etiqueta con el nombre del personaje */}
-      <div style={{
-        position: 'absolute',
-        top: '-25px',
-        backgroundColor: 'rgba(0,0,0,0.8)',
-        color: 'white',
-        padding: '2px 8px',
-        borderRadius: '4px',
-        fontSize: '12px',
-        fontWeight: 'bold',
-        whiteSpace: 'nowrap',
-        pointerEvents: 'none', /* Para que no estorbe al arrastrar el token */
-        boxShadow: '0 2px 4px rgba(0,0,0,0.5)'
-      }}>
-        {token.name}
-      </div>
+      {/* Etiqueta flotante con el nombre */}
+      {showNames && (
+        <div style={{
+          position: 'absolute',
+          top: '-25px',
+          backgroundColor: 'rgba(0,0,0,0.8)',
+          color: 'white',
+          padding: '2px 8px',
+          borderRadius: '4px',
+          fontSize: '12px',
+          fontWeight: 'bold',
+          whiteSpace: 'nowrap',
+          pointerEvents: 'none',
+          boxShadow: '0 2px 4px rgba(0,0,0,0.5)'
+        }}>
+          {token.name}
+        </div>
+      )}
 
-      {/* Menú contextual del token */}
-      {isMenuOpen && (
+      {}
+      {menuState.visible && createPortal(
         <div 
+          ref={menuRef}
           onPointerDown={(e) => e.stopPropagation()}
           style={{
-            position: 'absolute', top: '100%', left: '50%', transform: 'translateX(-50%)',
-            marginTop: '8px', backgroundColor: '#1f2937', padding: '8px', borderRadius: '6px',
-            boxShadow: '0 4px 6px rgba(0,0,0,0.5)', zIndex: 200
+            position: 'fixed', 
+            top: `${menuState.y}px`, 
+            left: `${menuState.x}px`,
+            backgroundColor: '#1f2937', 
+            padding: '12px', 
+            borderRadius: '6px',
+            boxShadow: '0 10px 25px rgba(0,0,0,0.8)', 
+            zIndex: 999999, /* Un z-index masivo asegurado por el portal */
+            display: 'flex', 
+            flexDirection: 'column', 
+            gap: '10px'
           }}
         >
           <button
@@ -73,7 +102,7 @@ const GameToken = ({ token, isDragging, onPointerDown, onToggleLock, size = 50 }
               if (onToggleLock) {
                 onToggleLock(token.id);
               }
-              setIsMenuOpen(false);
+              setMenuState({ visible: false, x: 0, y: 0 });
             }}
             style={{
               background: '#3b82f6', border: 'none', color: 'white',
@@ -83,7 +112,24 @@ const GameToken = ({ token, isDragging, onPointerDown, onToggleLock, size = 50 }
           >
             {token.isLocked ? '🔓 Desbloquear' : '🔒 Bloquear'}
           </button>
-        </div>
+          
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+            <span style={{ fontSize: '12px', color: '#9ca3af', fontWeight: 'bold', textAlign: 'center' }}>Tamaño</span>
+            <input 
+              type="range" 
+              min="20" max="250" 
+              value={currentSize}
+              onChange={(e) => {
+                if (onUpdateSize) {
+                  onUpdateSize(token.id, Number(e.target.value));
+                }
+              }}
+              onPointerDown={(e) => e.stopPropagation()} 
+              style={{ width: '120px', cursor: 'pointer' }}
+            />
+          </div>
+        </div>,
+        document.body // El destino final del Portal
       )}
     </div>
   );

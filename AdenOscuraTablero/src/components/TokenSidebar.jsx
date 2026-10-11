@@ -8,7 +8,9 @@ const TokenSidebar = ({
   onOpenModal, 
   onRemoveCharacter,
   onExportCharacters,
-  onImportClick
+  onImportClick,
+  showNames,
+  setShowNames
 }) => {
   // Controla si la sección de personajes está desplegada o no
   const [isCharactersExpanded, setIsCharactersExpanded] = useState(true);
@@ -58,6 +60,16 @@ const TokenSidebar = ({
             📤 Exportar
           </button>
         </div>
+        
+        <button 
+          onClick={() => setShowNames(!showNames)}
+          style={{ 
+            width: '100%', backgroundColor: showNames ? '#6366f1' : '#4f46e5', color: 'white', border: 'none', 
+            padding: '8px', borderRadius: '4px', cursor: 'pointer', fontSize: '13px', fontWeight: 'bold' 
+          }}
+        >
+          {showNames ? '👁️ Ocultar Nombres' : '👁️‍🗨️ Mostrar Nombres'}
+        </button>
       </div>
 
       {/* Roster de Personajes (Plegable) */}
