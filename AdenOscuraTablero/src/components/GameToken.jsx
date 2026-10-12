@@ -1,18 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 
-const AVAILABLE_STATUSES = [
-  { id: 'wound_light', icon: '🩹', label: 'Herido Leve' },
-  { id: 'wound_severe', icon: '🩸', label: 'Herido Grave' },
-  { id: 'dead', icon: '💀', label: 'Caído/Muerto' },
-  { id: 'asleep', icon: '💤', label: 'Dormido' },
-  { id: 'defending', icon: '🛡️', label: 'Defendiendo' },
-  { id: 'burning', icon: '🔥', label: 'Ardiendo' },
-  { id: 'frozen', icon: '❄️', label: 'Congelado' },
-  { id: 'poisoned', icon: '🤢', label: 'Envenenado' }
-];
-
-const GameToken = ({ token, isDragging, onPointerDown, onToggleLock, onUpdateSize, onToggleStatus, showNames }) => {
+const GameToken = ({ token, isDragging, onPointerDown, onToggleLock, onUpdateSize, onToggleStatus, showNames, customStatuses }) => {
   const [menuState, setMenuState] = useState({ visible: false, x: 0, y: 0 });
   const menuRef = useRef(null);
   const currentSize = token.size || 50;
@@ -43,12 +32,8 @@ const GameToken = ({ token, isDragging, onPointerDown, onToggleLock, onUpdateSiz
     if (menuState.visible) setMenuState({ visible: false, x: 0, y: 0 });
     
     if (!token.isLocked) {
-      // Si NO está bloqueado, le pasamos el clic a App.jsx para que lo arrastre.
       onPointerDown(e, token);
     }
-    // NOTA CLAVE: Si ESTÁ bloqueado, NO hacemos e.stopPropagation().
-    // Esto permite que el clic atraviese el token y llegue al tablero, 
-    // permitiendo al Master mover la cámara incluso pinchando sobre este token.
   };
 
   return (
@@ -72,7 +57,7 @@ const GameToken = ({ token, isDragging, onPointerDown, onToggleLock, onUpdateSiz
         justifyContent: 'center'
       }}
     >
-      {showNames && (
+      {token.showName !== false && (
         <div style={{
           position: 'absolute',
           top: '-25px',
@@ -90,23 +75,28 @@ const GameToken = ({ token, isDragging, onPointerDown, onToggleLock, onUpdateSiz
         </div>
       )}
 
-      {/* Renderizado de Iconos de Estado */}
+      {/* Renderizado de Iconos de Estado (SIN fondo negro transparente) */}
       {activeStatuses.length > 0 && (
         <div style={{
           position: 'absolute',
-          bottom: '-20px',
+          bottom: '-22px',
           display: 'flex',
-          gap: '2px',
+          gap: '3px',
           justifyContent: 'center',
-          backgroundColor: 'rgba(0,0,0,0.6)',
-          padding: '2px 4px',
-          borderRadius: '8px',
           pointerEvents: 'none',
           whiteSpace: 'nowrap'
         }}>
           {activeStatuses.map(statusId => {
-            const s = AVAILABLE_STATUSES.find(st => st.id === statusId);
-            return s ? <span key={statusId} title={s.label} style={{ fontSize: '14px', filter: 'drop-shadow(0 1px 1px rgba(0,0,0,0.8))' }}>{s.icon}</span> : null;
+            const s = customStatuses.find(st => st.id === statusId);
+            return s ? (
+              <span 
+                key={statusId} 
+                title={s.label} 
+                style={{ fontSize: '15px', filter: 'drop-shadow(0 1px 2px rgba(0,0,0,0.9))' }}
+              >
+                {s.icon}
+              </span>
+            ) : null;
           })}
         </div>
       )}
@@ -166,7 +156,7 @@ const GameToken = ({ token, isDragging, onPointerDown, onToggleLock, onUpdateSiz
 
           <div style={{ borderTop: '1px solid #4b5563', paddingTop: '8px', display: 'flex', flexWrap: 'wrap', gap: '4px', justifyContent: 'center' }}>
             <span style={{ fontSize: '11px', color: '#9ca3af', width: '100%', textAlign: 'center', marginBottom: '4px', fontWeight: 'bold' }}>Estados</span>
-            {AVAILABLE_STATUSES.map(status => {
+            {customStatuses.map(status => {
               const isActive = activeStatuses.includes(status.id);
               return (
                 <button

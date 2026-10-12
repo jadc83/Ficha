@@ -1,368 +1,376 @@
-import React, { useState, useEffect, useRef } from 'react';
-import TokenSidebar from './components/TokenSidebar';
-import CharacterModal from './components/CharacterModal';
+import React, { useState, useRef } from 'react';
+
 import Toolbar from './components/Toolbar';
-import MapContextMenu from './components/MapContextMenu';
 import GameBoard from './components/GameBoard';
+import TokenSidebar from './components/TokenSidebar';
+import SettingsModal from './components/SettingsModal';
+import MapContextMenu from './components/MapContextMenu';
+
 import useLocalStorage from './hooks/useLocalStorage';
 
 const App = () => {
-  // -- ESTADOS DE PERSISTENCIA --
   const [characters, setCharacters] = useLocalStorage('vtt_characters', []);
   const [tokens, setTokens] = useLocalStorage('vtt_tokens', []);
   const [maps, setMaps] = useLocalStorage('vtt_maps', []);
-  const [fowActions, setFowActions] = useLocalStorage('vtt_fow', []);
+  const [fowActions, setFowActions] = useLocalStorage('vtt_fowActions', []);
+  const [customStatuses, setCustomStatuses] = useLocalStorage('vtt_statuses', []);
 
-  // -- ESTADOS DE LA UI --
-  const [isCharModalOpen, setIsCharModalOpen] = useState(false);
-  const [showNames, setShowNames] = useState(true);
-  const [isMapsLocked, setIsMapsLocked] = useState(true);
-  const [isToolbarVisible, setIsToolbarVisible] = useState(true);
-  const [mapContextMenu, setMapContextMenu] = useState({ visible: false, x: 0, y: 0, mapId: null });
-
-  // -- ESTADOS DE LA CÁMARA --
-  const [pan, setPan] = useState({ x: 0, y: 0 });
-  const [scale, setScale] = useState(1);
+  const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
   
-  // -- ESTADOS DE ARRASTRE --
-  const [isDraggingPan, setIsDraggingPan] = useState(false);
-  const [draggedToken, setDraggedToken] = useState(null);
-  const [draggedMap, setDraggedMap] = useState(null);
-  const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
-
-  // -- ESTADOS DE CUADRÍCULA --
-  const [snapToGrid, setSnapToGrid] = useState(false);
-  const [gridSize, setGridSize] = useState(50);
-
-  // -- ESTADOS DE NIEBLA DE GUERRA --
+  // Estados de Niebla de Guerra
   const [fowEnabled, setFowEnabled] = useState(false);
   const [fowMode, setFowMode] = useState('none');
-  const [fowBrushSize, setFowBrushSize] = useState(60);
+  const [fowBrushSize, setFowBrushSize] = useState(100);
   const [fowVisionRadius, setFowVisionRadius] = useState(150);
+  
+  // Estados de Cuadrícula
+  const [snapToGrid, setSnapToGrid] = useState(false);
+  const [gridSize, setGridSize] = useState(50);
+  
+  // Estados del Tablero y Mapas
+  const [isMapsLocked, setIsMapsLocked] = useState(false);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [scale, setScale] = useState(1);
+  const [isDraggingPan, setIsDraggingPan] = useState(false);
+  
+  // Estados de Arrastre de Tokens
+  const [draggedToken, setDraggedToken] = useState(null);
+  const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
+  
+  // Estados de Arrastre de Mapas y Menú
+  const [draggedMap, setDraggedMap] = useState(null);
+  const [mapDragOffset, setMapDragOffset] = useState({ x: 0, y: 0 });
+  const [contextMenu, setContextMenu] = useState({ visible: false, x: 0, y: 0, mapId: null });
 
-  // -- REFERENCIAS --
-  const fileInputRef = useRef(null);
-  const charFileInputRef = useRef(null);
   const boardRef = useRef(null);
+  const fileInputRef = useRef(null);
+  const campaignInputRef = useRef(null);
   const fowCanvasRef = useRef(null);
-  const hasDragged = useRef(false);
-  const clickStart = useRef({ x: 0, y: 0 });
 
-  // Forzar reseteo de Vite para la pantalla completa
-  useEffect(() => {
-    const root = document.getElementById('root');
-    if (root) {
-      root.style.setProperty('max-width', '100%', 'important');
-      root.style.setProperty('width', '100%', 'important');
-      root.style.setProperty('height', '100vh', 'important');
-      root.style.setProperty('margin', '0', 'important');
-      root.style.setProperty('padding', '0', 'important');
-      root.style.setProperty('display', 'flex', 'important');
+  const handleMapUpload = (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const img = new Image();
+        img.onload = () => {
+          const newMap = {
+            id: Date.now(),
+            src: event.target.result,
+            x: 0,
+            y: 0,
+            width: img.width,
+            height: img.height,
+            zIndex: maps.length
+          };
+          setMaps([...maps, newMap]);
+        };
+        img.src = event.target.result;
+      };
+      reader.readAsDataURL(file);
     }
-  }, []);
-
-  const getBoardCoords = (clientX, clientY) => {
-    if (!boardRef.current) return { x: 0, y: 0 };
-    const rect = boardRef.current.getBoundingClientRect();
-    return {
-      x: (clientX - rect.left - pan.x) / scale,
-      y: (clientY - rect.top - pan.y) / scale
-    };
-  };
-
-  const revealFogAt = (x, y, radius) => {
-    setFowActions(prev => {
-      const last = prev[prev.length - 1];
-      if (last && last.type === 'reveal' && Math.abs(last.x - x) < 20 && Math.abs(last.y - y) < 20) return prev;
-      return [...prev, { x, y, radius, type: 'reveal' }];
-    });
-  };
-
-  const snapTo = (val, size) => Math.round(val / size) * size;
-
-  const handlePointerDown = (e) => {
-    clickStart.current = { x: e.clientX, y: e.clientY };
-    hasDragged.current = false;
-
-    if (e.button === 0 && fowEnabled && fowMode !== 'none') {
-      const coords = getBoardCoords(e.clientX, e.clientY);
-      setFowActions(prev => [...prev, { x: coords.x, y: coords.y, radius: fowBrushSize, type: fowMode }]);
-      return;
-    }
-
-    // Paneo con click derecho (2) o rueda (1)
-    if (e.button === 1 || e.button === 2) {
-      e.preventDefault();
-      setIsDraggingPan(true);
-      setDragStart({ x: e.clientX - pan.x, y: e.clientY - pan.y });
-    }
-  };
-
-  const handlePointerMove = (e) => {
-    if (Math.abs(e.clientX - clickStart.current.x) > 3 || Math.abs(e.clientY - clickStart.current.y) > 3) {
-      hasDragged.current = true;
-    }
-
-    if (fowEnabled && fowMode !== 'none' && e.buttons === 1) {
-      const coords = getBoardCoords(e.clientX, e.clientY);
-      setFowActions(prev => [...prev, { x: coords.x, y: coords.y, radius: fowBrushSize, type: fowMode }]);
-      return;
-    }
-
-    if (isDraggingPan) {
-      setPan({ x: e.clientX - dragStart.x, y: e.clientY - dragStart.y });
-      return;
-    }
-
-    if (draggedToken) {
-      const coords = getBoardCoords(e.clientX, e.clientY);
-      let newX = coords.x - dragStart.x;
-      let newY = coords.y - dragStart.y;
-      setTokens(tokens.map(t => t.id === draggedToken ? { ...t, x: newX, y: newY } : t));
-
-      if (fowEnabled) {
-        const currentToken = tokens.find(t => t.id === draggedToken);
-        const radius = fowVisionRadius;
-        revealFogAt(newX + (currentToken?.size || 50) / 2, newY + (currentToken?.size || 50) / 2, radius);
-      }
-    } else if (draggedMap && !isMapsLocked) {
-      const coords = getBoardCoords(e.clientX, e.clientY);
-      setMaps(maps.map(m => m.id === draggedMap ? { ...m, x: coords.x - dragStart.x, y: coords.y - dragStart.y } : m));
-    }
-  };
-
-  const handlePointerUp = () => {
-    if (draggedToken && snapToGrid) {
-      setTokens(prev => prev.map(t => {
-        if (t.id === draggedToken) {
-          const tSize = t.size || 50;
-          const centerX = t.x + tSize / 2;
-          const centerY = t.y + tSize / 2;
-          const snappedCX = snapTo(centerX, gridSize);
-          const snappedCY = snapTo(centerY, gridSize);
-          return { ...t, x: snappedCX - tSize / 2, y: snappedCY - tSize / 2 };
-        }
-        return t;
-      }));
-    }
-
-    if (draggedMap && snapToGrid && !isMapsLocked) {
-      setMaps(prev => prev.map(m => {
-        if (m.id === draggedMap) {
-          return { ...m, x: snapTo(m.x, gridSize), y: snapTo(m.y, gridSize) };
-        }
-        return m;
-      }));
-    }
-
-    setIsDraggingPan(false);
-    setDraggedToken(null);
-    setDraggedMap(null);
-  };
-
-  const handleWheel = (e) => {
-    if (e.deltaY !== 0) {
-      setScale(prev => Math.min(Math.max(0.2, prev - e.deltaY * 0.001), 3));
-    }
+    e.target.value = '';
   };
 
   const handleMapPointerDown = (e, map) => {
-    if (e.button === 0 && !isMapsLocked) {
-      e.stopPropagation();
-      const coords = getBoardCoords(e.clientX, e.clientY);
-      setDragStart({ x: coords.x - map.x, y: coords.y - map.y });
-      setDraggedMap(map.id);
-    }
+    if (isMapsLocked) return;
+    e.stopPropagation();
+    const rect = boardRef.current.getBoundingClientRect();
+    const mouseX = (e.clientX - rect.left) / scale - pan.x / scale;
+    const mouseY = (e.clientY - rect.top) / scale - pan.y / scale;
+    
+    setDraggedMap(map.id);
+    setMapDragOffset({ x: mouseX - map.x, y: mouseY - map.y });
   };
 
   const handleMapContextMenu = (e, map) => {
     e.preventDefault();
-    if (hasDragged.current) return;
-    setMapContextMenu({ visible: true, x: e.clientX, y: e.clientY, mapId: map.id });
-  };
-
-  const resetBoard = () => {
-    setTokens([]);
-    setMaps([]);
-    setFowActions([]);
-    setPan({ x: 0, y: 0 });
-    setScale(1);
-  };
-
-  const handleTokenPointerDown = (e, t) => {
     e.stopPropagation();
-    if (fowEnabled && fowMode !== 'none') return;
-    if (e.button === 0) {
-      const coords = getBoardCoords(e.clientX, e.clientY);
-      setDragStart({ x: coords.x - t.x, y: coords.y - t.y });
-      setDraggedToken(t.id);
+    setContextMenu({ visible: true, x: e.clientX, y: e.clientY, mapId: map.id });
+  };
+
+  const handleBringMapToFront = (mapId) => {
+    const mapToMove = maps.find(m => m.id === mapId);
+    const otherMaps = maps.filter(m => m.id !== mapId);
+    setMaps([...otherMaps, mapToMove]);
+    setContextMenu({ visible: false, x: 0, y: 0, mapId: null });
+  };
+
+  const handleDeleteMap = (mapId) => {
+    setMaps(maps.filter(m => m.id !== mapId));
+    setContextMenu({ visible: false, x: 0, y: 0, mapId: null });
+  };
+
+  const handlePointerDown = (e) => {
+    if (e.button === 1 || e.button === 2) {
+      setIsDraggingPan(true);
+      return;
+    }
+
+    if (fowEnabled && fowMode !== 'none') {
+      const rect = boardRef.current.getBoundingClientRect();
+      const logicalX = (e.clientX - rect.left) / scale - pan.x / scale;
+      const logicalY = (e.clientY - rect.top) / scale - pan.y / scale;
+      
+      setFowActions([...fowActions, { x: logicalX, y: logicalY, radius: fowBrushSize, type: fowMode }]);
     }
   };
 
-  const handleToggleTokenLock = (id) => {
-    setTokens(tokens.map(t => t.id === id ? { ...t, isLocked: !t.isLocked } : t));
-  };
+  const handlePointerMove = (e) => {
+    if (isDraggingPan) {
+      setPan(prev => ({ x: prev.x + e.movementX, y: prev.y + e.movementY }));
+      return;
+    }
 
-  const handleUpdateTokenSize = (id, size) => {
-    setTokens(tokens.map(t => t.id === id ? { ...t, size } : t));
-  };
+    const rect = boardRef.current.getBoundingClientRect();
+    const logicalX = (e.clientX - rect.left) / scale - pan.x / scale;
+    const logicalY = (e.clientY - rect.top) / scale - pan.y / scale;
 
-  const handleToggleTokenStatus = (id, statusId) => {
-    setTokens(tokens.map(t => {
-      if (t.id === id) {
-        const currentStatuses = t.statuses || [];
-        const hasStatus = currentStatuses.includes(statusId);
-        return {
-          ...t,
-          statuses: hasStatus 
-            ? currentStatuses.filter(s => s !== statusId) 
-            : [...currentStatuses, statusId]
-        };
+    if (fowEnabled && fowMode !== 'none' && e.buttons === 1) {
+      setFowActions(prev => [...prev, { x: logicalX, y: logicalY, radius: fowBrushSize, type: fowMode }]);
+      return;
+    }
+
+    if (draggedToken !== null) {
+      setTokens(tokens.map(t => {
+        if (t.id === draggedToken) {
+          return { ...t, x: logicalX - dragOffset.x, y: logicalY - dragOffset.y };
+        }
+        return t;
+      }));
+
+      // Revelar niebla automáticamente al arrastrar si está activado
+      if (fowEnabled) {
+        const tkn = tokens.find(t => t.id === draggedToken);
+        const tknSize = tkn?.size || 50;
+        setFowActions(prev => [...prev, {
+          x: logicalX - dragOffset.x + (tknSize / 2),
+          y: logicalY - dragOffset.y + (tknSize / 2),
+          radius: fowVisionRadius,
+          type: 'reveal'
+        }]);
       }
-      return t;
+      return;
+    }
+
+    if (draggedMap !== null) {
+      setMaps(maps.map(m => {
+        if (m.id === draggedMap) {
+          return { ...m, x: logicalX - mapDragOffset.x, y: logicalY - mapDragOffset.y };
+        }
+        return m;
+      }));
+    }
+  };
+
+  const handlePointerUp = () => {
+    setIsDraggingPan(false);
+    setDraggedMap(null);
+    
+    if (draggedToken !== null) {
+      if (snapToGrid) {
+        setTokens(tokens.map(t => {
+          if (t.id === draggedToken) {
+            const snappedX = Math.round(t.x / gridSize) * gridSize;
+            const snappedY = Math.round(t.y / gridSize) * gridSize;
+            return { ...t, x: snappedX, y: snappedY };
+          }
+          return t;
+        }));
+      }
+      setDraggedToken(null);
+    }
+  };
+
+  const handleWheel = (e) => {
+    if (e.ctrlKey) {
+      e.preventDefault();
+      const zoomFactor = -e.deltaY * 0.001;
+      setScale(prev => Math.min(Math.max(0.1, prev + zoomFactor), 5));
+    } else {
+      setPan(prev => ({ x: prev.x - e.deltaX, y: prev.y - e.deltaY }));
+    }
+  };
+
+  const handleTokenPointerDown = (e, token) => {
+    if (token.isLocked) return;
+    
+    // Bloquear el movimiento si tiene un estado que lo inmovilice (ej. Muerto/Dormido)
+    const hasImmobilize = token.statuses?.some(stId => {
+      const statusObj = customStatuses.find(s => s.id === stId);
+      return statusObj && statusObj.effect === 'immobilize';
+    });
+    
+    if (hasImmobilize) {
+      // No permitimos el arrastre
+      return;
+    }
+
+    e.stopPropagation();
+    const rect = boardRef.current.getBoundingClientRect();
+    const mouseX = (e.clientX - rect.left) / scale - pan.x / scale;
+    const mouseY = (e.clientY - rect.top) / scale - pan.y / scale;
+    
+    setDraggedToken(token.id);
+    setDragOffset({ x: mouseX - token.x, y: mouseY - token.y });
+  };
+
+  const handleAddTokenToBoard = (char) => {
+    // Calculamos el centro actual de la pantalla para que el token caiga ahí
+    const boardCenterX = -pan.x / scale + window.innerWidth / 2 / scale;
+    const boardCenterY = -pan.y / scale + window.innerHeight / 2 / scale;
+
+    const newToken = {
+      ...char,
+      id: `token_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      x: boardCenterX,
+      y: boardCenterY,
+      size: 50,
+      isLocked: false,
+      showName: true,
+      statuses: []
+    };
+    setTokens([...tokens, newToken]);
+  };
+
+  const handleRemoveToken = (id) => setTokens(tokens.filter(t => t.id !== id));
+  const handleRemoveCharacter = (id) => setCharacters(characters.filter(c => c.id !== id));
+  const handleToggleTokenLock = (tokenId) => setTokens(tokens.map(t => t.id === tokenId ? { ...t, isLocked: !t.isLocked } : t));
+  const handleUpdateTokenSize = (tokenId, newSize) => setTokens(tokens.map(t => t.id === tokenId ? { ...t, size: newSize } : t));
+  const handleToggleTokenName = (tokenId) => setTokens(tokens.map(t => t.id === tokenId ? { ...t, showName: t.showName === false ? true : false } : t));
+
+  const handleToggleTokenStatus = (tokenId, statusId) => {
+    setTokens(tokens.map(t => {
+      if (t.id !== tokenId) return t;
+      const currentStatuses = t.statuses || [];
+      if (currentStatuses.includes(statusId)) {
+        return { ...t, statuses: currentStatuses.filter(id => id !== statusId) };
+      } else {
+        return { ...t, statuses: [...currentStatuses, statusId] };
+      }
     }));
   };
 
-  return (
-    <div style={{ display: 'flex', width: '100%', height: '100vh', overflow: 'hidden', backgroundColor: '#111827', flexDirection: 'column' }}>
-      
-      {/* Pestaña para ocultar/mostrar Toolbar */}
-      <button
-        onClick={() => setIsToolbarVisible(!isToolbarVisible)}
-        style={{
-          position: 'absolute', top: 0, right: '20px', zIndex: 999999,
-          padding: '4px 12px', backgroundColor: '#374151', color: '#d1d5db',
-          border: 'none', borderBottomLeftRadius: '6px', borderBottomRightRadius: '6px',
-          cursor: 'pointer', fontSize: '12px', fontWeight: 'bold',
-          boxShadow: '0 2px 5px rgba(0,0,0,0.3)'
-        }}
-      >
-        {isToolbarVisible ? '▲ Ocultar' : '▼ Mostrar Herramientas'}
-      </button>
+  const handleExportCampaign = () => {
+    const campaignData = { maps, tokens, fowActions, customStatuses, characters };
+    const blob = new Blob([JSON.stringify(campaignData)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'partida_vtt.json';
+    a.click();
+  };
 
-      {/* TOOLBAR SUPERIOR */}
-      {isToolbarVisible && (
-        <div style={{ backgroundColor: '#1f2937', padding: '12px', borderBottom: '1px solid #374151', zIndex: 99999 }}>
+  const handleImportCampaign = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      try {
+        const data = JSON.parse(evt.target.result);
+        if (data.maps) setMaps(data.maps);
+        if (data.tokens) setTokens(data.tokens);
+        if (data.fowActions) setFowActions(data.fowActions);
+        if (data.customStatuses) setCustomStatuses(data.customStatuses);
+        if (data.characters) setCharacters(data.characters);
+        setIsSettingsModalOpen(false); // Cierra el modal de ajustes si todo va bien
+      } catch (err) {
+        alert("Archivo JSON inválido");
+      }
+      e.target.value = '';
+    };
+    reader.readAsText(file);
+  };
+
+  const handleImportCharacters = (newChars) => {
+    setCharacters([...characters, ...newChars]);
+  };
+
+  const handleResetBoard = () => {
+    setMaps([]);
+    setTokens([]);
+    setFowActions([]);
+  };
+
+  return (
+    <div style={{ display: 'flex', height: '100vh', width: '100vw', backgroundColor: '#111827', color: 'white', overflow: 'hidden' }}>
+      
+      <TokenSidebar 
+        tokens={tokens}
+        characters={characters}
+        onAddToken={handleAddTokenToBoard}
+        onRemoveToken={handleRemoveToken}
+        onRemoveCharacter={handleRemoveCharacter}
+        onToggleTokenName={handleToggleTokenName}
+        customStatuses={customStatuses}
+      />
+
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', position: 'relative' }}>
+        <div style={{ padding: '10px 20px', backgroundColor: '#1f2937', borderBottom: '1px solid #374151', display: 'flex', alignItems: 'center', zIndex: 10 }}>
           <Toolbar 
             onUploadClick={() => fileInputRef.current.click()}
             fileInputRef={fileInputRef}
-            onMapUpload={(e) => {
-              const file = e.target.files[0];
-              if (!file) return;
-              const url = URL.createObjectURL(file);
-              const img = new Image();
-              img.onload = () => {
-                setMaps([...maps, { id: Date.now(), src: url, x: 0, y: 0, width: img.width, height: img.height }]);
-              };
-              img.src = url;
-            }}
-            isMapsLocked={isMapsLocked} setIsMapsLocked={setIsMapsLocked}
-            snapToGrid={snapToGrid} setSnapToGrid={setSnapToGrid}
-            gridSize={gridSize} setGridSize={setGridSize}
-            fowEnabled={fowEnabled} setFowEnabled={setFowEnabled}
-            fowMode={fowMode} setFowMode={setFowMode}
-            fowBrushSize={fowBrushSize} setFowBrushSize={setFowBrushSize}
-            fowVisionRadius={fowVisionRadius} setFowVisionRadius={setFowVisionRadius}
-            onResetBoard={resetBoard}
+            onMapUpload={handleMapUpload}
+            isMapsLocked={isMapsLocked}
+            setIsMapsLocked={setIsMapsLocked}
+            fowEnabled={fowEnabled}
+            setFowEnabled={setFowEnabled}
+            onResetBoard={handleResetBoard}
+            onOpenSettings={() => setIsSettingsModalOpen(true)}
           />
         </div>
-      )}
-
-      {/* ÁREA PRINCIPAL: SIDEBAR + TABLERO */}
-      <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
-        <TokenSidebar 
-          tokens={tokens}
-          characters={characters}
-          onAddToken={(char) => setTokens([...tokens, { ...char, id: Date.now(), x: 50, y: 50, size: 50, isLocked: false, statuses: [] }])}
-          onRemoveToken={(id) => setTokens(tokens.filter(t => t.id !== id))}
-          onOpenModal={() => setIsCharModalOpen(true)}
-          onRemoveCharacter={(id) => setCharacters(characters.filter(c => c.id !== id))}
-          showNames={showNames}
-          setShowNames={setShowNames}
-          onExportCharacters={() => {
-            const blob = new Blob([JSON.stringify(characters)], { type: 'application/json' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = 'personajes_vtt.json';
-            a.click();
-          }}
-          onImportClick={() => charFileInputRef.current.click()}
-        />
-
-        <input 
-          type="file" accept=".json" ref={charFileInputRef} style={{ display: 'none' }}
-          onChange={(e) => {
-            const file = e.target.files[0];
-            if (!file) return;
-            const reader = new FileReader();
-            reader.onload = (evt) => {
-              try {
-                const imported = JSON.parse(evt.target.result);
-                if (Array.isArray(imported)) {
-                  setCharacters(prev => [...prev, ...imported]);
-                }
-              } catch (err) { alert("Archivo JSON inválido"); }
-            };
-            reader.readAsText(file);
-          }}
-        />
 
         <GameBoard 
           boardRef={boardRef}
-          pan={pan}
-          scale={scale}
-          isDraggingPan={isDraggingPan}
-          handlePointerDown={handlePointerDown}
-          handlePointerMove={handlePointerMove}
-          handlePointerUp={handlePointerUp}
-          handleWheel={handleWheel}
-          snapToGrid={snapToGrid}
-          gridSize={gridSize}
-          maps={maps}
-          handleMapPointerDown={handleMapPointerDown}
-          handleMapContextMenu={handleMapContextMenu}
-          isMapsLocked={isMapsLocked}
-          fowEnabled={fowEnabled}
-          fowCanvasRef={fowCanvasRef}
-          fowActions={fowActions}
-          tokens={tokens}
-          draggedToken={draggedToken}
-          showNames={showNames}
+          pan={pan} scale={scale} isDraggingPan={isDraggingPan}
+          handlePointerDown={handlePointerDown} handlePointerMove={handlePointerMove}
+          handlePointerUp={handlePointerUp} handleWheel={handleWheel}
+          snapToGrid={snapToGrid} gridSize={gridSize}
+          maps={maps} handleMapPointerDown={handleMapPointerDown}
+          handleMapContextMenu={handleMapContextMenu} isMapsLocked={isMapsLocked}
+          fowEnabled={fowEnabled} fowCanvasRef={fowCanvasRef} fowActions={fowActions}
+          tokens={tokens} draggedToken={draggedToken}
           onTokenPointerDown={handleTokenPointerDown}
           onToggleTokenLock={handleToggleTokenLock}
           onUpdateTokenSize={handleUpdateTokenSize}
           onToggleTokenStatus={handleToggleTokenStatus}
+          customStatuses={customStatuses}
         />
       </div>
 
-      {/* Menú Contextual Mapas */}
-      {mapContextMenu.visible && (
+      {contextMenu.visible && (
         <MapContextMenu 
-          x={mapContextMenu.x} 
-          y={mapContextMenu.y} 
-          mapId={mapContextMenu.mapId}
-          onBringToFront={(mapId) => {
-            setMaps(prev => {
-              const map = prev.find(m => m.id === mapId);
-              return [...prev.filter(m => m.id !== mapId), map];
-            });
-            setMapContextMenu({ visible: false, x: 0, y: 0, mapId: null });
-          }}
-          onDelete={(mapId) => {
-            setMaps(prev => prev.filter(m => m.id !== mapId));
-            setMapContextMenu({ visible: false, x: 0, y: 0, mapId: null });
-          }}
-          onClose={() => setMapContextMenu(prev => ({ ...prev, visible: false }))}
+          x={contextMenu.x} y={contextMenu.y} mapId={contextMenu.mapId}
+          onBringToFront={handleBringMapToFront} onDelete={handleDeleteMap}
+          onClose={() => setContextMenu({ ...contextMenu, visible: false })}
         />
       )}
 
-      {isCharModalOpen && (
-        <CharacterModal 
-          onClose={() => setIsCharModalOpen(false)}
-          onSave={(char) => { setCharacters([...characters, char]); setIsCharModalOpen(false); }}
+      {/* Input oculto para la importación de campaña */}
+      <input 
+        type="file" accept=".json" ref={campaignInputRef} 
+        style={{ display: 'none' }} onChange={handleImportCampaign} 
+      />
+
+      {isSettingsModalOpen && (
+        <SettingsModal 
+          onClose={() => setIsSettingsModalOpen(false)}
+          characters={characters}
+          onSaveCharacter={(c) => setCharacters([...characters, c])}
+          onImportCharacters={handleImportCharacters}
+          customStatuses={customStatuses}
+          onAddCustomStatus={(s) => setCustomStatuses([...customStatuses, s])}
+          onRemoveCustomStatus={(id) => setCustomStatuses(customStatuses.filter(s => s.id !== id))}
+          onExportCampaign={handleExportCampaign}
+          onImportCampaign={() => campaignInputRef.current.click()}
+          fowBrushSize={fowBrushSize} setFowBrushSize={setFowBrushSize}
+          fowVisionRadius={fowVisionRadius} setFowVisionRadius={setFowVisionRadius}
+          fowMode={fowMode} setFowMode={setFowMode}
+          snapToGrid={snapToGrid} setSnapToGrid={setSnapToGrid}
+          gridSize={gridSize} setGridSize={setGridSize}
         />
       )}
+      
     </div>
   );
 };

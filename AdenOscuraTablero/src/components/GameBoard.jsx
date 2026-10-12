@@ -24,11 +24,11 @@ const GameBoard = ({
   fowActions,
   tokens,
   draggedToken,
-  showNames,
   onTokenPointerDown,
   onToggleTokenLock,
   onUpdateTokenSize,
-  onToggleTokenStatus
+  onToggleTokenStatus,
+  customStatuses
 }) => {
   return (
     <div 
@@ -54,11 +54,11 @@ const GameBoard = ({
             key={token.id}
             token={token}
             isDragging={draggedToken === token.id}
-            showNames={showNames}
             onPointerDown={onTokenPointerDown}
             onToggleLock={onToggleTokenLock}
             onUpdateSize={onUpdateTokenSize}
             onToggleStatus={onToggleTokenStatus}
+            customStatuses={customStatuses}
           />
         ))}
       </div>
