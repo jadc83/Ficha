@@ -1,29 +1,39 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 
-const MapLayer = ({ maps, fowCanvasRef }) => {
+const MapLayer = ({ maps, fowCanvasRef, isPlayerView = false, onToggleDoor }) => {
   const [readingNote, setReadingNote] = useState(null);
   const [visibleNotes, setVisibleNotes] = useState({});
+  const [doorMenu, setDoorMenu] = useState({ visible: false, x: 0, y: 0, door: null });
+  const doorMenuRef = useRef(null);
 
-  // RADAR DE NIEBLA: Escanea 4 veces por segundo la visibilidad de las notas
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (doorMenuRef.current && !doorMenuRef.current.contains(e.target)) {
+        setDoorMenu(prev => ({ ...prev, visible: false }));
+      }
+    };
+    if (doorMenu.visible) {
+      document.addEventListener('pointerdown', handleClickOutside, true);
+    }
+    return () => document.removeEventListener('pointerdown', handleClickOutside, true);
+  }, [doorMenu.visible]);
+
+  // RADAR DE NIEBLA: Escanea 4 veces por segundo la visibilidad de las notas y puertas
   useEffect(() => {
     const checkVisibility = () => {
       if (!fowCanvasRef || !fowCanvasRef.current) return;
       
       try {
-        // willReadFrequently optimiza el canvas para leer sus píxeles a alta velocidad
         const ctx = fowCanvasRef.current.getContext('2d', { willReadFrequently: true });
         let changed = false;
         const newVis = { ...visibleNotes };
 
         maps.forEach(element => {
-          if (element.type === 'note') {
-            // Buscamos el píxel central de la nota (+20px) ajustado al offset del canvas (+1000)
-            const canvasX = element.x + 20 + 1000;
-            const canvasY = element.y + 20 + 1000;
-            const pixel = ctx.getImageData(canvasX, canvasY, 1, 1).data;
-            
-            // Si el alpha (opacidad) es menor a 128, significa que hemos borrado más del 50% de la niebla
+          if (element.type === 'note' || element.type === 'door') {
+            const centerX = element.x + ((element.width || 40) / 2) + 1000;
+            const centerY = element.y + ((element.height || 40) / 2) + 1000;
+            const pixel = ctx.getImageData(centerX, centerY, 1, 1).data;
             const isVisible = pixel[3] < 128; 
 
             if (newVis[element.id] !== isVisible) {
@@ -33,13 +43,10 @@ const MapLayer = ({ maps, fowCanvasRef }) => {
           }
         });
 
-        // Solo repintamos React si alguna nota ha aparecido o desaparecido
         if (changed) {
           setVisibleNotes(newVis);
         }
-      } catch (error) {
-        // Ignoramos errores transitorios de lectura del canvas
-      }
+      } catch (error) {}
     };
 
     const interval = setInterval(checkVisibility, 250);
@@ -67,7 +74,6 @@ const MapLayer = ({ maps, fowCanvasRef }) => {
 
         // RENDERIZAR NOTAS (Tangibles)
         if (element.type === 'note') {
-          // Si la niebla está encendida y el Radar ha dicho que la nota está a oscuras -> No la dibujamos
           if (fowCanvasRef && fowCanvasRef.current && visibleNotes[element.id] === false) {
             return null; 
           }
@@ -92,8 +98,120 @@ const MapLayer = ({ maps, fowCanvasRef }) => {
             </div>
           );
         }
+
+        // RENDERIZAR PUERTAS INTERACTIVAS
+        if (element.type === 'door') {
+          if (fowCanvasRef && fowCanvasRef.current && visibleNotes[element.id] === false) {
+            return null;
+          }
+
+          return (
+            <div
+              key={element.id}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                if (isPlayerView) return;
+                setDoorMenu({ visible: true, x: e.clientX, y: e.clientY, door: element });
+              }}
+              onPointerDown={(e) => {
+                if (e.button === 2 && !isPlayerView) {
+                  e.stopPropagation();
+                }
+              }}
+              style={{
+                position: 'absolute',
+                left: `${element.x}px`,
+                top: `${element.y}px`,
+                width: `${element.width || 60}px`,
+                height: `${element.height || 16}px`,
+                backgroundColor: element.isOpen ? 'rgba(16, 185, 129, 0.25)' : '#78350f',
+                border: element.isOpen ? '2px dashed #10b981' : '2px solid #f59e0b',
+                borderRadius: '4px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                cursor: isPlayerView ? 'default' : 'context-menu',
+                boxShadow: element.isOpen ? 'none' : '0 4px 10px rgba(0,0,0,0.75)',
+                zIndex: 3,
+                fontSize: '12px',
+                transition: 'all 0.2s'
+              }}
+              title={element.isOpen ? 'Puerta Abierta (Clic derecho para cerrar)' : 'Puerta Cerrada (Clic derecho para abrir)'}
+            >
+              {element.isOpen ? '🔓' : '🚪'}
+            </div>
+          );
+        }
+
         return null;
       })}
+
+      {/* GUÍA SUTIL DE PAREDES (Solo visible para el Master, invisible para jugadores) */}
+      {!isPlayerView && (
+        <svg style={{ position: 'absolute', top: 0, left: 0, width: '8000px', height: '8000px', overflow: 'visible', pointerEvents: 'none', zIndex: 4 }}>
+          {maps.filter(el => el.type === 'wall').map(wall => (
+            <line
+              key={wall.id}
+              x1={wall.x1} y1={wall.y1} x2={wall.x2} y2={wall.y2}
+              stroke="rgba(239, 68, 68, 0.45)"
+              strokeWidth={6}
+              strokeDasharray="8,6"
+              strokeLinecap="round"
+            />
+          ))}
+        </svg>
+      )}
+
+      {/* MENÚ CONTEXTUAL DE PUERTA (Clic derecho -> Abrir / Cerrar) */}
+      {doorMenu.visible && doorMenu.door && createPortal(
+        <div
+          ref={doorMenuRef}
+          onPointerDown={(e) => e.stopPropagation()}
+          style={{
+            position: 'fixed',
+            top: `${doorMenu.y}px`,
+            left: `${doorMenu.x}px`,
+            backgroundColor: '#1f2937',
+            padding: '10px',
+            borderRadius: '8px',
+            border: '1px solid #374151',
+            boxShadow: '0 10px 25px rgba(0,0,0,0.85)',
+            zIndex: 999999,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '6px',
+            minWidth: '150px'
+          }}
+        >
+          <div style={{ fontSize: '11px', color: '#9ca3af', fontWeight: 'bold', textAlign: 'center', borderBottom: '1px solid #374151', paddingBottom: '4px' }}>
+            Control de Puerta
+          </div>
+          <button
+            onClick={() => {
+              if (onToggleDoor) onToggleDoor(doorMenu.door.id);
+              setDoorMenu({ visible: false, x: 0, y: 0, door: null });
+            }}
+            style={{
+              padding: '8px 12px',
+              backgroundColor: doorMenu.door.isOpen ? '#ef4444' : '#10b981',
+              color: 'white',
+              border: 'none',
+              borderRadius: '6px',
+              cursor: 'pointer',
+              fontWeight: 'bold',
+              fontSize: '13px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '6px'
+            }}
+          >
+            {doorMenu.door.isOpen ? '🔒 Cerrar Puerta' : '🔓 Abrir'}
+          </button>
+        </div>,
+        document.body
+      )}
 
       {/* MODAL DE LECTURA EN LA MESA (A través de un Portal) */}
       {readingNote && createPortal(

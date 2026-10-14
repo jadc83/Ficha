@@ -10,17 +10,16 @@ const MapCreator = ({ initialElements, onLoadMapToBoard }) => {
   const [draggingElements, setDraggingElements] = useState(false);
   
   const [clipboard, setClipboard] = useState([]);
-  
-  // Estado para el editor de notas
   const [editingNote, setEditingNote] = useState(null); 
+  const [toolMode, setToolMode] = useState('select'); // 'select' | 'wall'
+  const [drawingWall, setDrawingWall] = useState(null);
 
   const boardRef = useRef(null);
   const fileInputRef = useRef(null);
-  const importRef = useRef(null);
+  const importRef = useRef(null); // Ref para importar layouts
 
   useEffect(() => {
     const handleKeyDown = (e) => {
-      // Evitar que los atajos se disparen si estamos escribiendo en una nota
       if (editingNote) return; 
 
       if (e.key === 'Delete' || e.key === 'Backspace') {
@@ -37,8 +36,8 @@ const MapCreator = ({ initialElements, onLoadMapToBoard }) => {
         if (clipboard.length > 0) {
           const newElements = clipboard.map(el => ({
             ...el,
-            id: Date.now() + Math.random(), // Nueva ID
-            x: el.x + 50, // Desplazamiento para que no caiga exactamente encima
+            id: Date.now() + Math.random(), 
+            x: el.x + 50, 
             y: el.y + 50
           }));
           setElements(prev => [...prev, ...newElements]);
@@ -72,6 +71,29 @@ const MapCreator = ({ initialElements, onLoadMapToBoard }) => {
     e.target.value = '';
   };
 
+  const handleExportMapConfig = () => {
+    const blob = new Blob([JSON.stringify(elements)], { type: 'application/json' });
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'layout_mapa.json'; a.click();
+  };
+
+  const handleImportMapConfig = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      try { 
+        const importedData = JSON.parse(evt.target.result);
+        if (Array.isArray(importedData)) {
+          setElements(importedData);
+        } else {
+          alert("El archivo no tiene el formato correcto.");
+        }
+      } catch (err) { alert("Archivo inválido."); }
+      e.target.value = '';
+    };
+    reader.readAsText(file);
+  };
+
   const handleCreateNote = () => {
     const newNote = {
       id: Date.now(), type: 'note', title: 'Nueva Nota', content: 'Escribe aquí la pista o descripción...',
@@ -80,7 +102,21 @@ const MapCreator = ({ initialElements, onLoadMapToBoard }) => {
       width: 40, height: 40, zIndex: elements.length
     };
     setElements(prev => [...prev, newNote]);
-    setEditingNote(newNote); // Abre el editor automáticamente
+    setEditingNote(newNote);
+  };
+
+  const handleCreateDoor = () => {
+    const newDoor = {
+      id: Date.now(),
+      type: 'door',
+      x: -pan.x / scale + window.innerWidth / 2 / scale,
+      y: -pan.y / scale + window.innerHeight / 2 / scale,
+      width: 60,
+      height: 16,
+      isOpen: false,
+      zIndex: elements.length + 10
+    };
+    setElements(prev => [...prev, newDoor]);
   };
 
   const handlePointerDown = (e) => {
@@ -88,20 +124,34 @@ const MapCreator = ({ initialElements, onLoadMapToBoard }) => {
       setIsDraggingPan(true);
       return;
     }
-    // Clic en el fondo deselecciona todo
+
+    if (toolMode === 'wall' && e.button === 0) {
+      const rect = boardRef.current.getBoundingClientRect();
+      const logicalX = (e.clientX - rect.left - pan.x) / scale;
+      const logicalY = (e.clientY - rect.top - pan.y) / scale;
+      setDrawingWall({
+        id: Date.now(),
+        type: 'wall',
+        x1: logicalX,
+        y1: logicalY,
+        x2: logicalX,
+        y2: logicalY
+      });
+      return;
+    }
+
     setIsDraggingPan(true);
     setSelectedIds([]);
   };
 
   const handleElementPointerDown = (e, el) => {
+    if (toolMode === 'wall') return;
     e.stopPropagation();
-    if (e.button === 2) return; // Clic derecho reservado para menús futuros
+    if (e.button === 2) return; 
 
-    // Si pulsamos Shift o Ctrl, añadimos a la selección
     if (e.shiftKey || e.ctrlKey) {
       setSelectedIds(prev => prev.includes(el.id) ? prev.filter(id => id !== el.id) : [...prev, el.id]);
     } else {
-      // Si el elemento no está seleccionado, seleccionamos solo este
       if (!selectedIds.includes(el.id)) {
         setSelectedIds([el.id]);
       }
@@ -110,6 +160,14 @@ const MapCreator = ({ initialElements, onLoadMapToBoard }) => {
   };
 
   const handlePointerMove = (e) => {
+    if (drawingWall) {
+      const rect = boardRef.current.getBoundingClientRect();
+      const logicalX = (e.clientX - rect.left - pan.x) / scale;
+      const logicalY = (e.clientY - rect.top - pan.y) / scale;
+      setDrawingWall(prev => ({ ...prev, x2: logicalX, y2: logicalY }));
+      return;
+    }
+
     if (isDraggingPan && !draggingElements) {
       setPan(prev => ({ x: prev.x + e.movementX, y: prev.y + e.movementY }));
       return;
@@ -121,11 +179,26 @@ const MapCreator = ({ initialElements, onLoadMapToBoard }) => {
       
       setElements(prev => prev.map(el => {
         if (selectedIds.includes(el.id)) {
+          if (el.type === 'wall') {
+            return { ...el, x1: el.x1 + dx, y1: el.y1 + dy, x2: el.x2 + dx, y2: el.y2 + dy };
+          }
           return { ...el, x: el.x + dx, y: el.y + dy };
         }
         return el;
       }));
     }
+  };
+
+  const handlePointerUp = () => {
+    if (drawingWall) {
+      const dist = Math.hypot(drawingWall.x2 - drawingWall.x1, drawingWall.y2 - drawingWall.y1);
+      if (dist > 10) {
+        setElements(prev => [...prev, drawingWall]);
+      }
+      setDrawingWall(null);
+    }
+    setIsDraggingPan(false);
+    setDraggingElements(false);
   };
 
   const handleWheel = (e) => {
@@ -137,18 +210,42 @@ const MapCreator = ({ initialElements, onLoadMapToBoard }) => {
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', position: 'relative' }}>
       
       {/* Barra superior de herramientas */}
-      <div style={{ padding: '15px 20px', backgroundColor: '#1f2937', borderBottom: '1px solid #374151', display: 'flex', justifyContent: 'space-between' }}>
-        <div style={{ display: 'flex', gap: '10px' }}>
+      <div style={{ padding: '15px 20px', backgroundColor: '#1f2937', borderBottom: '1px solid #374151', display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '10px' }}>
+        <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
           <input type="file" accept="image/*" ref={fileInputRef} onChange={handleImageUpload} style={{ display: 'none' }} />
-          <button onClick={() => fileInputRef.current.click()} style={{ padding: '8px 16px', background: '#3b82f6', color: 'white', borderRadius: '6px', border: 'none', cursor: 'pointer', fontWeight: 'bold' }}>🖼️ Añadir Mapa</button>
-          <button onClick={handleCreateNote} style={{ padding: '8px 16px', background: '#f59e0b', color: 'white', borderRadius: '6px', border: 'none', cursor: 'pointer', fontWeight: 'bold' }}>📝 Añadir Nota</button>
+          <button onClick={() => fileInputRef.current.click()} style={{ padding: '8px 14px', background: '#3b82f6', color: 'white', borderRadius: '6px', border: 'none', cursor: 'pointer', fontWeight: 'bold' }}>🖼️ Añadir Mapa</button>
           
-          <div style={{ width: '1px', backgroundColor: '#4b5563', margin: '0 5px' }}></div>
-          <span style={{ display: 'flex', alignItems: 'center', color: '#9ca3af', fontSize: '14px' }}>Seleccionados: {selectedIds.length} (Usa Ctrl+C / Ctrl+V)</span>
+          <button onClick={handleCreateNote} style={{ padding: '8px 14px', background: '#f59e0b', color: 'white', borderRadius: '6px', border: 'none', cursor: 'pointer', fontWeight: 'bold' }}>📝 Añadir Nota</button>
+
+          <button onClick={handleCreateDoor} style={{ padding: '8px 14px', background: '#8b5cf6', color: 'white', borderRadius: '6px', border: 'none', cursor: 'pointer', fontWeight: 'bold' }} title="Doble clic en la puerta para rotarla entre Horizontal y Vertical">🚪 Añadir Puerta</button>
+
+          <button
+            onClick={() => setToolMode(toolMode === 'wall' ? 'select' : 'wall')}
+            style={{
+              padding: '8px 14px',
+              background: toolMode === 'wall' ? '#ef4444' : '#374151',
+              color: 'white',
+              borderRadius: '6px',
+              border: toolMode === 'wall' ? '2px solid #fca5a5' : '1px solid #4b5563',
+              cursor: 'pointer',
+              fontWeight: 'bold'
+            }}
+          >
+            🧱 {toolMode === 'wall' ? 'Trazando Pared (Clic para salir)' : 'Trazar Pared'}
+          </button>
+          
+          <div style={{ width: '1px', backgroundColor: '#4b5563', margin: '0 5px', height: '24px' }}></div>
+          
+          <input type="file" accept=".json" ref={importRef} onChange={handleImportMapConfig} style={{ display: 'none' }} />
+          <button onClick={() => importRef.current.click()} style={{ padding: '6px 12px', background: '#4b5563', color: 'white', borderRadius: '6px', border: '1px solid #6b7280', cursor: 'pointer' }}>📥 Importar Escenario</button>
+          <button onClick={handleExportMapConfig} style={{ padding: '6px 12px', background: '#4b5563', color: 'white', borderRadius: '6px', border: '1px solid #6b7280', cursor: 'pointer' }}>📤 Exportar Escenario</button>
+
+          <div style={{ width: '1px', backgroundColor: '#4b5563', margin: '0 5px', height: '24px' }}></div>
+          <span style={{ display: 'flex', alignItems: 'center', color: '#9ca3af', fontSize: '13px' }}>Seleccionados: {selectedIds.length}</span>
         </div>
         
         <div style={{ display: 'flex', gap: '10px' }}>
-          <button onClick={() => onLoadMapToBoard(elements)} style={{ padding: '8px 24px', background: '#10b981', color: 'white', borderRadius: '6px', border: 'none', cursor: 'pointer', fontWeight: 'bold', fontSize: '16px' }}>🚀 Cargar a la Mesa</button>
+          <button onClick={() => onLoadMapToBoard(elements)} style={{ padding: '8px 24px', background: '#10b981', color: 'white', borderRadius: '6px', border: 'none', cursor: 'pointer', fontWeight: 'bold', fontSize: '16px', boxShadow: '0 4px 6px rgba(0,0,0,0.3)' }}>🚀 Enviar a la Mesa</button>
         </div>
       </div>
 
@@ -156,10 +253,10 @@ const MapCreator = ({ initialElements, onLoadMapToBoard }) => {
       <div 
         ref={boardRef}
         onPointerDown={handlePointerDown} onPointerMove={handlePointerMove} 
-        onPointerUp={() => { setIsDraggingPan(false); setDraggingElements(false); }} 
-        onPointerLeave={() => { setIsDraggingPan(false); setDraggingElements(false); }} 
+        onPointerUp={handlePointerUp} 
+        onPointerLeave={handlePointerUp} 
         onWheel={handleWheel} onContextMenu={(e) => e.preventDefault()}
-        style={{ flex: 1, position: 'relative', overflow: 'hidden', cursor: isDraggingPan ? 'grabbing' : 'crosshair', backgroundColor: '#000' }}
+        style={{ flex: 1, position: 'relative', overflow: 'hidden', cursor: toolMode === 'wall' ? 'crosshair' : (isDraggingPan ? 'grabbing' : 'grab'), backgroundColor: '#000' }}
       >
         <div style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})`, transformOrigin: '0 0', position: 'absolute', width: '100%', height: '100%' }}>
           
@@ -167,7 +264,7 @@ const MapCreator = ({ initialElements, onLoadMapToBoard }) => {
             const isSelected = selectedIds.includes(el.id);
             const borderStyle = isSelected ? '3px solid #3b82f6' : 'none';
 
-            if (el.type === 'image') {
+            if (el.type === 'image' || !el.type) {
               return (
                 <img 
                   key={el.id} src={el.src} alt="map" 
@@ -197,8 +294,73 @@ const MapCreator = ({ initialElements, onLoadMapToBoard }) => {
                 </div>
               );
             }
+
+            if (el.type === 'door') {
+              return (
+                <div
+                  key={el.id}
+                  onPointerDown={(e) => handleElementPointerDown(e, el)}
+                  onDoubleClick={(e) => {
+                    e.stopPropagation();
+                    // Rotar orientación de la puerta (Horizontal <-> Vertical)
+                    setElements(prev => prev.map(item => item.id === el.id ? { ...item, width: item.height, height: item.width } : item));
+                  }}
+                  style={{
+                    position: 'absolute',
+                    left: `${el.x}px`,
+                    top: `${el.y}px`,
+                    width: `${el.width || 60}px`,
+                    height: `${el.height || 16}px`,
+                    backgroundColor: '#92400e',
+                    border: isSelected ? '3px solid #3b82f6' : '2px solid #f59e0b',
+                    borderRadius: '4px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    cursor: 'grab',
+                    zIndex: 110,
+                    boxShadow: '0 4px 8px rgba(0,0,0,0.6)',
+                    fontSize: '12px'
+                  }}
+                  title="Puerta (Doble clic para rotar Horizontal/Vertical)"
+                >
+                  🚪
+                </div>
+              );
+            }
             return null;
           })}
+
+          {/* Capa SVG para dibujar y seleccionar Paredes */}
+          <svg style={{ position: 'absolute', top: 0, left: 0, width: '8000px', height: '8000px', overflow: 'visible', pointerEvents: 'none', zIndex: 95 }}>
+            {elements.filter(el => el.type === 'wall').map(wall => {
+              const isSelected = selectedIds.includes(wall.id);
+              return (
+                <g key={wall.id} style={{ pointerEvents: 'stroke', cursor: 'pointer' }} onPointerDown={(e) => handleElementPointerDown(e, wall)}>
+                  <line
+                    x1={wall.x1} y1={wall.y1} x2={wall.x2} y2={wall.y2}
+                    stroke={isSelected ? '#3b82f6' : '#ef4444'}
+                    strokeWidth={10}
+                    strokeLinecap="round"
+                  />
+                  <line
+                    x1={wall.x1} y1={wall.y1} x2={wall.x2} y2={wall.y2}
+                    stroke="#fca5a5"
+                    strokeWidth={2}
+                    strokeDasharray="6,6"
+                  />
+                </g>
+              );
+            })}
+            {drawingWall && (
+              <line
+                x1={drawingWall.x1} y1={drawingWall.y1} x2={drawingWall.x2} y2={drawingWall.y2}
+                stroke="#fbbf24"
+                strokeWidth={8}
+                strokeLinecap="round"
+              />
+            )}
+          </svg>
         </div>
       </div>
 

@@ -5,13 +5,17 @@ import FogLayer from './FogLayer';
 import GameToken from './GameToken';
 
 const GameBoard = ({
-  boardRef, scale,
+  boardRef, scale, pan = { x: 0, y: 0 }, isDraggingPan = false, isPlayerView = false,
+  fowEnabled, fowMode = 'none', rulerActive = false, pingActive = false,
   handlePointerDown, handlePointerMove, handlePointerUp, handleWheel,
   snapToGrid, gridSize, maps,
-  fowEnabled, fowCanvasRef, fowActions,
+  fowCanvasRef, fowActions,
   tokens, draggedToken, onTokenPointerDown, onToggleTokenLock, onUpdateTokenSize, onToggleTokenStatus, customStatuses,
-  rulerMeasure, pings = []
+  rulerMeasure, pings = [], onToggleDoor
 }) => {
+  const isToolActive = rulerActive || pingActive || (!isPlayerView && fowEnabled && fowMode !== 'none');
+  const boardCursor = isDraggingPan ? 'grabbing' : (isToolActive ? 'crosshair' : 'grab');
+
   const renderRuler = () => {
     if (!rulerMeasure) return null;
     const { startX, startY, endX, endY } = rulerMeasure;
@@ -63,7 +67,14 @@ const GameBoard = ({
       onDragStart={(e) => e.preventDefault()}
       onWheel={handleWheel}
       onContextMenu={(e) => e.preventDefault()}
-      style={{ flex: 1, position: 'relative', overflow: 'hidden', cursor: 'crosshair', userSelect: 'none', WebkitUserSelect: 'none' }}
+      style={{
+        flex: 1,
+        position: 'relative',
+        overflow: 'hidden',
+        cursor: boardCursor,
+        userSelect: 'none',
+        WebkitUserSelect: 'none'
+      }}
     >
       <style>{`
         @keyframes vttPingWave {
@@ -75,11 +86,11 @@ const GameBoard = ({
           50% { transform: translate(-50%, -50%) scale(1.25); }
         }
       `}</style>
-      <div style={{ transform: `scale(${scale})`, transformOrigin: '0 0', position: 'absolute', width: '100%', height: '100%' }}>
+      <div style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})`, transformOrigin: '0 0', position: 'absolute', width: '100%', height: '100%' }}>
         
         <GridLayer snapToGrid={snapToGrid} gridSize={gridSize} />
         
-        <MapLayer maps={maps} fowCanvasRef={fowCanvasRef} />
+        <MapLayer maps={maps} fowCanvasRef={fowCanvasRef} isPlayerView={isPlayerView} onToggleDoor={onToggleDoor} />
         
         <FogLayer fowEnabled={fowEnabled} fowCanvasRef={fowCanvasRef} fowActions={fowActions} />
 

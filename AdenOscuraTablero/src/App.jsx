@@ -5,17 +5,27 @@ import GameBoard from './components/GameBoard';
 import TokenSidebar from './components/TokenSidebar';
 import SettingsModal from './components/SettingsModal';
 import DiceRoller from './components/DiceRoller';
+import Soundboard, { playerSoundEngine, SOUND_CATALOG } from './components/Soundboard';
 import useLocalStorage from './hooks/useLocalStorage';
+
+// Auxiliares geométricos para impedir que un token atraviese paredes o puertas cerradas
+const ccw = (A, B, C) => (C.y - A.y) * (B.x - A.x) > (B.y - A.y) * (C.x - A.x);
+const segmentsIntersect = (A, B, C, D) => ccw(A, C, D) !== ccw(B, C, D) && ccw(A, B, C) !== ccw(A, B, D);
+
+const distToSegment = (p, v, w) => {
+  const l2 = (w.x - v.x) ** 2 + (w.y - v.y) ** 2;
+  if (l2 === 0) return Math.hypot(p.x - v.x, p.y - v.y);
+  let t = ((p.x - v.x) * (w.x - v.x) + (p.y - v.y) * (w.y - v.y)) / l2;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(p.x - (v.x + t * (w.x - v.x)), p.y - (v.y + t * (w.y - v.y)));
+};
 
 const App = () => {
   const isPlayerView = new URLSearchParams(window.location.search).get('view') === 'player';
 
   const [characters, setCharacters] = useLocalStorage('vtt_characters', []);
   const [tokens, setTokens] = useLocalStorage('vtt_tokens', []);
-  
-  // CAMBIADO: Usamos useState normal en lugar de useLocalStorage para no saturar la memoria del navegador con imágenes gigantes.
   const [maps, setMaps] = useState([]); 
-  
   const [fowActions, setFowActions] = useLocalStorage('vtt_fowActions', []);
   const [customStatuses, setCustomStatuses] = useLocalStorage('vtt_statuses', []);
 
@@ -30,6 +40,9 @@ const App = () => {
   const [gridSize, setGridSize] = useState(50);
   
   const [scale, setScale] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [isDraggingPan, setIsDraggingPan] = useState(false);
+  const [isHudMinimized, setIsHudMinimized] = useState(false);
   
   const [draggedToken, setDraggedToken] = useState(null);
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
@@ -39,20 +52,113 @@ const App = () => {
   const [pingActive, setPingActive] = useState(false);
   const [pings, setPings] = useState([]);
 
+  // Estados para Efectos de Sonido (Master Toast vs Player Audio)
+  const [activeSoundLoops, setActiveSoundLoops] = useState([]);
+  const [masterToast, setMasterToast] = useState(null);
+
   const boardRef = useRef(null);
   const campaignInputRef = useRef(null);
   const fowCanvasRef = useRef(null);
   const pingTimerRef = useRef(null);
+  const toastTimerRef = useRef(null);
   const downPosRef = useRef(null);
   const syncChannelRef = useRef(null);
   const latestStateRef = useRef({});
+  const panStartRef = useRef({ x: 0, y: 0 });
+
+  // Cuando cambia el tamaño de la cuadrícula (gridSize), adaptamos proporcionalmente el tamaño de los tokens en mesa
+  const handleGridSizeChange = (newSize) => {
+    const ratio = newSize / gridSize;
+    setGridSize(newSize);
+    setTokens(prev => prev.map(t => ({
+      ...t,
+      size: Math.max(20, Math.round((t.size || gridSize) * ratio)),
+      x: snapToGrid ? Math.round(t.x / newSize) * newSize : t.x,
+      y: snapToGrid ? Math.round(t.y / newSize) * newSize : t.y
+    })));
+  };
+
+  // Comprueba si el movimiento desde (oldX, oldY) hasta (newX, newY) choca con una pared o puerta cerrada
+  const isMovementBlocked = (oldX, oldY, newX, newY, tokenSize) => {
+    const radius = tokenSize * 0.38;
+    const startCenter = { x: oldX + tokenSize / 2, y: oldY + tokenSize / 2 };
+    const endCenter = { x: newX + tokenSize / 2, y: newY + tokenSize / 2 };
+
+    for (const el of maps) {
+      if (el.type === 'wall') {
+        const A = { x: el.x1, y: el.y1 };
+        const B = { x: el.x2, y: el.y2 };
+        if (segmentsIntersect(startCenter, endCenter, A, B) || distToSegment(endCenter, A, B) < radius) {
+          return true;
+        }
+      } else if (el.type === 'door' && !el.isOpen) {
+        const w = el.width || 60;
+        const h = el.height || 16;
+        // Convertimos la puerta cerrada en un segmento bloqueante a lo largo de su eje central
+        const A = w >= h
+          ? { x: el.x, y: el.y + h / 2 }
+          : { x: el.x + w / 2, y: el.y };
+        const B = w >= h
+          ? { x: el.x + w, y: el.y + h / 2 }
+          : { x: el.x + w / 2, y: el.y + h };
+
+        if (segmentsIntersect(startCenter, endCenter, A, B) || distToSegment(endCenter, A, B) < radius) {
+          return true;
+        }
+      }
+    }
+    return false;
+  };
+
+  const showMasterSoundToast = (soundObj) => {
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    setMasterToast(soundObj);
+    toastTimerRef.current = setTimeout(() => {
+      setMasterToast(null);
+    }, 3200);
+  };
+
+  const handleTriggerSound = (sound) => {
+    if (sound.loop) {
+      setActiveSoundLoops(prev =>
+        prev.includes(sound.id) ? prev.filter(id => id !== sound.id) : [...prev, sound.id]
+      );
+    }
+    showMasterSoundToast(sound);
+    if (syncChannelRef.current) {
+      syncChannelRef.current.postMessage({ type: 'PLAY_SOUND', payload: sound });
+    }
+  };
+
+  const handleStopAllSounds = () => {
+    setActiveSoundLoops([]);
+    showMasterSoundToast({ icon: '🔇', label: 'Todos los sonidos detenidos' });
+    if (syncChannelRef.current) {
+      syncChannelRef.current.postMessage({ type: 'STOP_ALL_SOUNDS' });
+    }
+  };
+
+  const handleToggleDoor = (doorId) => {
+    let openedNow = false;
+    setMaps(prev => prev.map(el => {
+      if (el.id === doorId && el.type === 'door') {
+        openedNow = !el.isOpen;
+        return { ...el, isOpen: !el.isOpen };
+      }
+      return el;
+    }));
+    const doorSound = SOUND_CATALOG.find(s => s.id === (openedNow ? 'sfx_door_open' : 'sfx_door_slam'));
+    if (doorSound) {
+      handleTriggerSound(doorSound);
+    }
+  };
 
   // Mantener referencia actualizada del estado del GM para responder al instante cuando se abre la ventana de jugador
   useEffect(() => {
     latestStateRef.current = {
-      maps, tokens, fowEnabled, fowActions, snapToGrid, gridSize, scale, customStatuses, rulerMeasure
+      maps, tokens, fowEnabled, fowActions, snapToGrid, gridSize, customStatuses, rulerMeasure
     };
-  }, [maps, tokens, fowEnabled, fowActions, snapToGrid, gridSize, scale, customStatuses, rulerMeasure]);
+  }, [maps, tokens, fowEnabled, fowActions, snapToGrid, gridSize, customStatuses, rulerMeasure]);
 
   useEffect(() => {
     const channel = new BroadcastChannel('vtt_realtime_sync');
@@ -61,7 +167,26 @@ const App = () => {
     channel.onmessage = (event) => {
       const { type, payload } = event.data || {};
 
+      if (type === 'SPAWN_PING' && payload) {
+        setPings(prev => [...prev, payload]);
+        setTimeout(() => {
+          setPings(prev => prev.filter(p => p.id !== payload.id));
+        }, 3200);
+      }
+
+      if (type === 'SYNC_RULER') {
+        setRulerMeasure(payload);
+      }
+
       if (isPlayerView) {
+        // El audio SOLO suena en la pantalla del jugador
+        if (type === 'PLAY_SOUND' && payload) {
+          playerSoundEngine.play(payload.id);
+        }
+        if (type === 'STOP_ALL_SOUNDS') {
+          playerSoundEngine.stopAll();
+        }
+
         if (type === 'SYNC_STATE' && payload) {
           if (payload.maps !== undefined) setMaps(payload.maps);
           if (payload.tokens !== undefined) setTokens(payload.tokens);
@@ -69,18 +194,10 @@ const App = () => {
           if (payload.fowActions !== undefined) setFowActions(payload.fowActions);
           if (payload.snapToGrid !== undefined) setSnapToGrid(payload.snapToGrid);
           if (payload.gridSize !== undefined) setGridSize(payload.gridSize);
-          if (payload.scale !== undefined) setScale(payload.scale);
           if (payload.customStatuses !== undefined) setCustomStatuses(payload.customStatuses);
           if (payload.rulerMeasure !== undefined) setRulerMeasure(payload.rulerMeasure);
         }
-        if (type === 'SPAWN_PING' && payload) {
-          setPings(prev => [...prev, payload]);
-          setTimeout(() => {
-            setPings(prev => prev.filter(p => p.id !== payload.id));
-          }, 3200);
-        }
       } else {
-        // Si la ventana de jugadores acaba de abrirse y pide el estado completo
         if (type === 'REQUEST_INITIAL_STATE') {
           channel.postMessage({
             type: 'SYNC_STATE',
@@ -103,15 +220,15 @@ const App = () => {
     syncChannelRef.current.postMessage({
       type: 'SYNC_STATE',
       payload: {
-        maps, tokens, fowEnabled, fowActions, snapToGrid, gridSize, scale, customStatuses, rulerMeasure
+        maps, tokens, fowEnabled, fowActions, snapToGrid, gridSize, customStatuses, rulerMeasure
       }
     });
-  }, [isPlayerView, maps, tokens, fowEnabled, fowActions, snapToGrid, gridSize, scale, customStatuses, rulerMeasure]);
+  }, [isPlayerView, maps, tokens, fowEnabled, fowActions, snapToGrid, gridSize, customStatuses, rulerMeasure]);
 
   const spawnPing = (x, y) => {
     const newPing = { id: Date.now() + Math.random(), x, y };
     setPings(prev => [...prev, newPing]);
-    if (syncChannelRef.current && !isPlayerView) {
+    if (syncChannelRef.current) {
       syncChannelRef.current.postMessage({ type: 'SPAWN_PING', payload: newPing });
     }
     setTimeout(() => {
@@ -124,36 +241,48 @@ const App = () => {
     window.open(playerUrl, 'VTT_Player_View', 'width=1280,height=800,menubar=no,toolbar=no');
   };
 
+  const handleToggleFullscreen = () => {
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen?.().catch(() => {});
+    } else {
+      document.exitFullscreen?.().catch(() => {});
+    }
+  };
+
   const handlePointerDown = (e) => {
-    if (isPlayerView) return;
-
     const rect = boardRef.current.getBoundingClientRect();
-    const logicalX = (e.clientX - rect.left) / scale;
-    const logicalY = (e.clientY - rect.top) / scale;
+    const logicalX = (e.clientX - rect.left - pan.x) / scale;
+    const logicalY = (e.clientY - rect.top - pan.y) / scale;
 
-    // Ping inmediato si el botón "Marcar Sonido" está activo, con Shift + Clic izquierdo o botón central
     if ((e.button === 0 && (pingActive || e.shiftKey)) || e.button === 1) {
       spawnPing(logicalX, logicalY);
       return;
     }
 
-    // Regla de medición (si el botón Regla está activo o si mantiene Alt)
     if (e.button === 0 && (rulerActive || e.altKey)) {
-      setRulerMeasure({ startX: logicalX, startY: logicalY, endX: logicalX, endY: logicalY });
+      const newMeasure = { startX: logicalX, startY: logicalY, endX: logicalX, endY: logicalY };
+      setRulerMeasure(newMeasure);
+      if (isPlayerView && syncChannelRef.current) {
+        syncChannelRef.current.postMessage({ type: 'SYNC_RULER', payload: newMeasure });
+      }
       return;
     }
 
-    // Si la niebla está activa, pintamos o borramos sobre el lienzo.
-    if (fowEnabled && fowMode !== 'none') {
+    if (!isPlayerView && fowEnabled && fowMode !== 'none' && e.button === 0) {
       setFowActions([...fowActions, { x: logicalX, y: logicalY, radius: fowBrushSize, type: fowMode }]);
       return;
     }
 
-    // Temporizador para Ping mantendo pulsado el clic izquierdo (~500ms sin mover)
+    if (e.button === 0 || e.button === 2) {
+      setIsDraggingPan(true);
+      panStartRef.current = { x: e.clientX - pan.x, y: e.clientY - pan.y };
+    }
+
     if (e.button === 0) {
       downPosRef.current = { x: e.clientX, y: e.clientY };
       if (pingTimerRef.current) clearTimeout(pingTimerRef.current);
       pingTimerRef.current = setTimeout(() => {
+        setIsDraggingPan(false);
         spawnPing(logicalX, logicalY);
       }, 500);
     }
@@ -161,10 +290,9 @@ const App = () => {
 
   const handlePointerMove = (e) => {
     const rect = boardRef.current.getBoundingClientRect();
-    const logicalX = (e.clientX - rect.left) / scale;
-    const logicalY = (e.clientY - rect.top) / scale;
+    const logicalX = (e.clientX - rect.left - pan.x) / scale;
+    const logicalY = (e.clientY - rect.top - pan.y) / scale;
 
-    // Si mueve el ratón mientras mantiene pulsado, cancelamos el Ping por pulsación larga
     if (pingTimerRef.current && downPosRef.current) {
       const moveDist = Math.hypot(e.clientX - downPosRef.current.x, e.clientY - downPosRef.current.y);
       if (moveDist > 6) {
@@ -173,34 +301,55 @@ const App = () => {
       }
     }
 
-    // Actualizar extremo de la regla si se está midiendo
-    if (rulerMeasure) {
-      setRulerMeasure(prev => ({ ...prev, endX: logicalX, endY: logicalY }));
+    if (isDraggingPan && draggedToken === null) {
+      setPan({
+        x: e.clientX - panStartRef.current.x,
+        y: e.clientY - panStartRef.current.y
+      });
       return;
     }
 
-    // Pintar niebla de guerra en arrastre continuo
+    if (rulerMeasure) {
+      const updatedMeasure = { ...rulerMeasure, endX: logicalX, endY: logicalY };
+      setRulerMeasure(updatedMeasure);
+      if (isPlayerView && syncChannelRef.current) {
+        syncChannelRef.current.postMessage({ type: 'SYNC_RULER', payload: updatedMeasure });
+      }
+      return;
+    }
+
+    if (isPlayerView) return;
+
     if (fowEnabled && fowMode !== 'none' && e.buttons === 1) {
       setFowActions(prev => [...prev, { x: logicalX, y: logicalY, radius: fowBrushSize, type: fowMode }]);
       return;
     }
 
-    // Mover un token
+    // Mover un token respetando paredes y puertas cerradas
     if (draggedToken !== null) {
+      const currentToken = tokens.find(t => t.id === draggedToken);
+      if (!currentToken) return;
+
+      const tknSize = currentToken.size || gridSize;
+      const targetX = logicalX - dragOffset.x;
+      const targetY = logicalY - dragOffset.y;
+
+      // Si el movimiento atraviesa una pared o puerta cerrada, impedimos el paso
+      if (isMovementBlocked(currentToken.x, currentToken.y, targetX, targetY, tknSize)) {
+        return;
+      }
+
       setTokens(prev => prev.map(t => {
         if (t.id === draggedToken) {
-          return { ...t, x: logicalX - dragOffset.x, y: logicalY - dragOffset.y };
+          return { ...t, x: targetX, y: targetY };
         }
         return t;
       }));
 
-      // Visión automática del token en la niebla
       if (fowEnabled) {
-        const tkn = tokens.find(t => t.id === draggedToken);
-        const tknSize = tkn?.size || 50;
         setFowActions(prev => [...prev, {
-          x: logicalX - dragOffset.x + (tknSize / 2),
-          y: logicalY - dragOffset.y + (tknSize / 2),
+          x: targetX + (tknSize / 2),
+          y: targetY + (tknSize / 2),
           radius: fowVisionRadius,
           type: 'reveal'
         }]);
@@ -209,20 +358,32 @@ const App = () => {
   };
 
   const handlePointerUp = () => {
+    if (isDraggingPan) {
+      setIsDraggingPan(false);
+    }
     if (pingTimerRef.current) {
       clearTimeout(pingTimerRef.current);
       pingTimerRef.current = null;
     }
     if (rulerMeasure) {
       setRulerMeasure(null);
+      if (isPlayerView && syncChannelRef.current) {
+        syncChannelRef.current.postMessage({ type: 'SYNC_RULER', payload: null });
+      }
     }
     if (draggedToken !== null) {
       if (snapToGrid) {
         setTokens(prev => prev.map(t => {
           if (t.id === draggedToken) {
-            const snappedX = Math.round(t.x / gridSize) * gridSize;
-            const snappedY = Math.round(t.y / gridSize) * gridSize;
-            return { ...t, x: snappedX, y: snappedY };
+            const tknSize = t.size || gridSize;
+            // Centramos el token respecto a la casilla más cercana
+            const cellX = Math.floor((t.x + tknSize / 2) / gridSize) * gridSize + (gridSize - tknSize) / 2;
+            const cellY = Math.floor((t.y + tknSize / 2) / gridSize) * gridSize + (gridSize - tknSize) / 2;
+
+            if (isMovementBlocked(t.x, t.y, cellX, cellY, tknSize)) {
+              return t;
+            }
+            return { ...t, x: cellX, y: cellY };
           }
           return t;
         }));
@@ -240,7 +401,6 @@ const App = () => {
     if (isPlayerView) return;
     if (token.isLocked) return;
     
-    // Validar si el token está inmovilizado
     const hasImmobilize = token.statuses?.some(stId => {
       const statusObj = customStatuses.find(s => s.id === stId);
       return statusObj && statusObj.effect === 'immobilize';
@@ -254,23 +414,27 @@ const App = () => {
     }
 
     const rect = boardRef.current.getBoundingClientRect();
-    const mouseX = (e.clientX - rect.left) / scale;
-    const mouseY = (e.clientY - rect.top) / scale;
+    const mouseX = (e.clientX - rect.left - pan.x) / scale;
+    const mouseY = (e.clientY - rect.top - pan.y) / scale;
     
     setDraggedToken(token.id);
     setDragOffset({ x: mouseX - token.x, y: mouseY - token.y });
   };
 
   const handleAddTokenToBoard = (char) => {
-    const boardCenterX = window.innerWidth / 2 / scale;
-    const boardCenterY = window.innerHeight / 2 / scale;
+    const rect = boardRef.current ? boardRef.current.getBoundingClientRect() : { width: window.innerWidth, height: window.innerHeight };
+    const rawCenterX = (rect.width / 2 - pan.x) / scale - gridSize / 2;
+    const rawCenterY = (rect.height / 2 - pan.y) / scale - gridSize / 2;
+
+    const spawnX = snapToGrid ? Math.round(rawCenterX / gridSize) * gridSize : rawCenterX;
+    const spawnY = snapToGrid ? Math.round(rawCenterY / gridSize) * gridSize : rawCenterY;
 
     const newToken = {
       ...char,
       id: `token_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-      x: boardCenterX,
-      y: boardCenterY,
-      size: 50,
+      x: spawnX,
+      y: spawnY,
+      size: gridSize,
       isLocked: false,
       showName: true,
       statuses: []
@@ -308,9 +472,7 @@ const App = () => {
         if (data.customStatuses) setCustomStatuses(data.customStatuses);
         if (data.characters) setCharacters(data.characters);
         setIsSettingsModalOpen(false);
-      } catch (err) {
-        alert("Archivo JSON inválido");
-      }
+      } catch (err) {}
       e.target.value = '';
     };
     reader.readAsText(file);
@@ -336,16 +498,6 @@ const App = () => {
             <Toolbar 
               onResetBoard={() => { setMaps([]); setTokens([]); setFowActions([]); }}
               onOpenSettings={() => setIsSettingsModalOpen(true)}
-              rulerActive={rulerActive}
-              onToggleRuler={() => {
-                setRulerActive(!rulerActive);
-                if (!rulerActive) setPingActive(false);
-              }}
-              pingActive={pingActive}
-              onTogglePing={() => {
-                setPingActive(!pingActive);
-                if (!pingActive) setRulerActive(false);
-              }}
               onOpenPlayerView={handleOpenPlayerView}
             />
           </div>
@@ -354,10 +506,17 @@ const App = () => {
         <GameBoard 
           boardRef={boardRef}
           scale={scale}
+          pan={pan}
+          isDraggingPan={isDraggingPan}
+          isPlayerView={isPlayerView}
+          fowEnabled={fowEnabled}
+          fowMode={fowMode}
+          rulerActive={rulerActive}
+          pingActive={pingActive}
           handlePointerDown={handlePointerDown} handlePointerMove={handlePointerMove}
           handlePointerUp={handlePointerUp} handleWheel={handleWheel}
           snapToGrid={snapToGrid} gridSize={gridSize} maps={maps}
-          fowEnabled={fowEnabled} fowCanvasRef={fowCanvasRef} fowActions={fowActions}
+          fowCanvasRef={fowCanvasRef} fowActions={fowActions}
           tokens={tokens} draggedToken={draggedToken}
           onTokenPointerDown={handleTokenPointerDown}
           onToggleTokenLock={(tokenId) => setTokens(tokens.map(t => t.id === tokenId ? { ...t, isLocked: !t.isLocked } : t))}
@@ -366,9 +525,144 @@ const App = () => {
           customStatuses={customStatuses}
           rulerMeasure={rulerMeasure}
           pings={pings}
+          onToggleDoor={handleToggleDoor}
         />
 
-        {!isPlayerView && <DiceRoller />}
+        {/* Barra flotante de herramientas de navegación y vista */}
+        <div
+          onPointerDown={(e) => e.stopPropagation()}
+          onWheel={(e) => e.stopPropagation()}
+          style={{
+            position: 'fixed',
+            bottom: '20px',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            backgroundColor: 'rgba(17, 24, 39, 0.92)',
+            border: '1px solid #374151',
+            borderRadius: '999px',
+            padding: isHudMinimized ? '6px 14px' : '8px 16px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '10px',
+            boxShadow: '0 10px 25px rgba(0,0,0,0.7)',
+            zIndex: 5000,
+            backdropFilter: 'blur(8px)'
+          }}
+        >
+          {!isHudMinimized ? (
+            <>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                <button
+                  onClick={() => setScale(prev => Math.max(0.1, +(prev - 0.15).toFixed(2)))}
+                  style={{ width: '30px', height: '30px', borderRadius: '50%', border: '1px solid #4b5563', backgroundColor: '#1f2937', color: 'white', cursor: 'pointer', fontWeight: 'bold' }}
+                  title="Alejar Zoom"
+                >➖</button>
+                <span style={{ minWidth: '48px', textAlign: 'center', fontSize: '13px', fontWeight: 'bold', color: '#d1d5db' }}>
+                  {Math.round(scale * 100)}%
+                </span>
+                <button
+                  onClick={() => setScale(prev => Math.min(5, +(prev + 0.15).toFixed(2)))}
+                  style={{ width: '30px', height: '30px', borderRadius: '50%', border: '1px solid #4b5563', backgroundColor: '#1f2937', color: 'white', cursor: 'pointer', fontWeight: 'bold' }}
+                  title="Acercar Zoom"
+                >➕</button>
+              </div>
+
+              <div style={{ width: '1px', height: '20px', backgroundColor: '#374151' }} />
+
+              <button
+                onClick={() => { setPan({ x: 0, y: 0 }); setScale(1); }}
+                style={{ padding: '6px 12px', borderRadius: '999px', border: '1px solid #4b5563', backgroundColor: '#374151', color: 'white', cursor: 'pointer', fontSize: '13px', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '5px' }}
+                title="Volver al centro del mapa y restaurar zoom al 100%"
+              >
+                🎯 Centrar
+              </button>
+
+              <button
+                onClick={() => {
+                  setRulerActive(!rulerActive);
+                  if (!rulerActive) setPingActive(false);
+                }}
+                style={{
+                  padding: '6px 12px',
+                  borderRadius: '999px',
+                  border: rulerActive ? '1px solid #fbbf24' : '1px solid #4b5563',
+                  backgroundColor: rulerActive ? '#f59e0b' : '#374151',
+                  color: rulerActive ? '#111827' : 'white',
+                  cursor: 'pointer',
+                  fontSize: '13px',
+                  fontWeight: 'bold',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '5px'
+                }}
+                title="Medir distancias en el mapa (Atajo: Alt + Arrastrar)"
+              >
+                📏 Regla
+              </button>
+
+              <button
+                onClick={() => {
+                  setPingActive(!pingActive);
+                  if (!pingActive) setRulerActive(false);
+                }}
+                style={{
+                  padding: '6px 12px',
+                  borderRadius: '999px',
+                  border: pingActive ? '1px solid #f87171' : '1px solid #4b5563',
+                  backgroundColor: pingActive ? '#ef4444' : '#374151',
+                  color: 'white',
+                  cursor: 'pointer',
+                  fontSize: '13px',
+                  fontWeight: 'bold',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '5px'
+                }}
+                title="Señalar un punto en el mapa (Atajo: Shift + Clic)"
+              >
+                🔊 Señalar
+              </button>
+
+              <div style={{ width: '1px', height: '20px', backgroundColor: '#374151' }} />
+
+              <button
+                onClick={handleToggleFullscreen}
+                style={{ padding: '6px 12px', borderRadius: '999px', border: '1px solid #4b5563', backgroundColor: '#1f2937', color: 'white', cursor: 'pointer', fontSize: '13px', fontWeight: 'bold' }}
+                title="Alternar Pantalla Completa"
+              >
+                ⛶ Pantalla Completa
+              </button>
+
+              <button
+                onClick={() => setIsHudMinimized(true)}
+                style={{ background: 'transparent', border: 'none', color: '#9ca3af', cursor: 'pointer', fontSize: '14px', padding: '4px' }}
+                title="Minimizar controles"
+              >
+                ✕
+              </button>
+            </>
+          ) : (
+            <button
+              onClick={() => setIsHudMinimized(false)}
+              style={{ background: 'transparent', border: 'none', color: '#d1d5db', cursor: 'pointer', fontSize: '13px', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '6px' }}
+              title="Mostrar herramientas de navegación y vista"
+            >
+              🛠️ Controles de Vista
+            </button>
+          )}
+        </div>
+
+        {!isPlayerView && (
+          <>
+            <Soundboard
+              onTriggerSound={handleTriggerSound}
+              onStopAllSounds={handleStopAllSounds}
+              activeLoops={activeSoundLoops}
+              masterToast={masterToast}
+            />
+            <DiceRoller />
+          </>
+        )}
       </div>
 
       <input type="file" accept=".json" ref={campaignInputRef} style={{ display: 'none' }} onChange={handleImportCampaign} />
@@ -389,7 +683,7 @@ const App = () => {
           fowBrushSize={fowBrushSize} setFowBrushSize={setFowBrushSize}
           fowVisionRadius={fowVisionRadius} setFowVisionRadius={setFowVisionRadius}
           fowMode={fowMode} setFowMode={setFowMode}
-          snapToGrid={snapToGrid} setSnapToGrid={setSnapToGrid} gridSize={gridSize} setGridSize={setGridSize}
+          snapToGrid={snapToGrid} setSnapToGrid={setSnapToGrid} gridSize={gridSize} setGridSize={handleGridSizeChange}
           maps={maps} onLoadMapToBoard={(newMaps) => { setMaps(newMaps); setIsSettingsModalOpen(false); }}
         />
       )}

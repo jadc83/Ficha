@@ -1,6 +1,6 @@
 import React from 'react';
 
-const Toolbar = ({ onResetBoard, onOpenSettings, rulerActive, onToggleRuler, pingActive, onTogglePing, onOpenPlayerView }) => {
+const Toolbar = ({ onResetBoard, onOpenSettings, onOpenPlayerView }) => {
   const [confirmReset, setConfirmReset] = React.useState(false);
 
   return (
@@ -9,47 +9,8 @@ const Toolbar = ({ onResetBoard, onOpenSettings, rulerActive, onToggleRuler, pin
       style={{ display: 'flex', flexDirection: 'row', gap: '16px', alignItems: 'center', width: '100%', justifyContent: 'space-between' }}
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-        <button
-          onClick={onToggleRuler}
-          style={{
-            padding: '8px 14px',
-            background: rulerActive ? '#f59e0b' : '#374151',
-            color: rulerActive ? '#111827' : 'white',
-            borderRadius: '6px',
-            border: rulerActive ? '1px solid #fbbf24' : '1px solid #4b5563',
-            cursor: 'pointer',
-            fontWeight: 'bold',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '6px'
-          }}
-          title="También puedes mantener pulsado Alt y arrastrar en cualquier momento"
-        >
-          📏 {rulerActive ? 'Regla Activa' : 'Regla'}
-        </button>
-
-        <button
-          onClick={onTogglePing}
-          style={{
-            padding: '8px 14px',
-            background: pingActive ? '#ef4444' : '#374151',
-            color: 'white',
-            borderRadius: '6px',
-            border: pingActive ? '1px solid #f87171' : '1px solid #4b5563',
-            cursor: 'pointer',
-            fontWeight: 'bold',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '6px',
-            boxShadow: pingActive ? '0 0 12px rgba(239, 68, 68, 0.5)' : 'none'
-          }}
-          title="Haz clic en cualquier punto del mapa para emitir una onda de sonido/alerta (Atajo: Shift + Clic)"
-        >
-          🔊 {pingActive ? 'Marcando Sonido...' : 'Marcar Sonido'}
-        </button>
-
-        <span style={{ fontSize: '12px', color: '#9ca3af', marginLeft: '4px' }}>
-          💡 <strong>Atajos:</strong> Shift + Clic (Sonido) | Alt + Arrastrar (Regla)
+        <span style={{ fontSize: '13px', color: '#9ca3af', fontWeight: 'bold' }}>
+          🗺️ Mesa Virtual del Master | <span style={{ color: '#60a5fa' }}>Usa la barra inferior flotante para Zoom, Regla y Pings</span>
         </span>
       </div>
 
