@@ -54,7 +54,22 @@ const TokenSidebar = ({
             {characters?.map((char) => (
               <div key={char.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px', backgroundColor: '#1f2937', borderRadius: '6px' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                  <div style={{ width: '16px', height: '16px', borderRadius: '50%', backgroundColor: char.color }}></div>
+                  <div style={{
+                    width: '28px',
+                    height: '28px',
+                    borderRadius: '50%',
+                    backgroundColor: char.color,
+                    border: `2px solid ${char.color}`,
+                    overflow: 'hidden',
+                    flexShrink: 0,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center'
+                  }}>
+                    {char.avatar && (
+                      <img src={char.avatar} alt={char.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                    )}
+                  </div>
                   <span style={{ fontSize: '14px', fontWeight: 'bold' }}>{char.name}</span>
                 </div>
                 <div style={{ display: 'flex', gap: '6px' }}>
@@ -98,7 +113,19 @@ const TokenSidebar = ({
                 }}
               >
                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                  <div style={{ width: '16px', height: '16px', borderRadius: '50%', backgroundColor: token.color }}></div>
+                  <div style={{
+                    width: '28px',
+                    height: '28px',
+                    borderRadius: '50%',
+                    backgroundColor: token.color,
+                    border: `2px solid ${token.color}`,
+                    overflow: 'hidden',
+                    flexShrink: 0
+                  }}>
+                    {token.avatar && (
+                      <img src={token.avatar} alt={token.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                    )}
+                  </div>
                   <div style={{ display: 'flex', flexDirection: 'column' }}>
                     <span style={{ fontSize: '14px' }}>{token.name}</span>
                     {activeStatuses.length > 0 && (

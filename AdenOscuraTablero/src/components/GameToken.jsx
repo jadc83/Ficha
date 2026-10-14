@@ -29,6 +29,8 @@ const GameToken = ({ token, isDragging, onPointerDown, onToggleLock, onUpdateSiz
   };
 
   const handlePointerDown = (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
     if (menuState.visible) setMenuState({ visible: false, x: 0, y: 0 });
     
     if (!token.isLocked) {
@@ -40,6 +42,7 @@ const GameToken = ({ token, isDragging, onPointerDown, onToggleLock, onUpdateSiz
     <div
       onContextMenu={handleContextMenu}
       onPointerDown={handlePointerDown}
+      onDragStart={(e) => e.preventDefault()}
       style={{
         position: 'absolute',
         left: `${token.x}px`,
@@ -49,14 +52,38 @@ const GameToken = ({ token, isDragging, onPointerDown, onToggleLock, onUpdateSiz
         backgroundColor: token.color,
         borderRadius: '50%',
         cursor: token.isLocked ? 'not-allowed' : (isDragging ? 'grabbing' : 'grab'),
-        boxShadow: '0 4px 6px rgba(0,0,0,0.3)',
-        border: token.isLocked ? '2px solid #ef4444' : '2px solid rgba(255,255,255,0.2)',
+        boxShadow: '0 4px 10px rgba(0,0,0,0.5)',
+        border: token.isLocked
+          ? '3px solid #ef4444'
+          : token.avatar
+          ? `3px solid ${token.color}`
+          : '2px solid rgba(255,255,255,0.2)',
         zIndex: isDragging ? 100 : 10,
         display: 'flex',
         alignItems: 'center',
-        justifyContent: 'center'
+        justifyContent: 'center',
+        boxSizing: 'border-box',
+        userSelect: 'none',
+        WebkitUserSelect: 'none',
+        touchAction: 'none'
       }}
     >
+      {token.avatar && (
+        <img
+          src={token.avatar}
+          alt={token.name}
+          draggable={false}
+          style={{
+            width: '100%',
+            height: '100%',
+            borderRadius: '50%',
+            objectFit: 'cover',
+            pointerEvents: 'none',
+            userSelect: 'none'
+          }}
+        />
+      )}
+
       {token.showName !== false && (
         <div style={{
           position: 'absolute',
@@ -72,32 +99,6 @@ const GameToken = ({ token, isDragging, onPointerDown, onToggleLock, onUpdateSiz
           boxShadow: '0 2px 4px rgba(0,0,0,0.5)'
         }}>
           {token.name}
-        </div>
-      )}
-
-      {/* Renderizado de Iconos de Estado (SIN fondo negro transparente) */}
-      {activeStatuses.length > 0 && (
-        <div style={{
-          position: 'absolute',
-          bottom: '-22px',
-          display: 'flex',
-          gap: '3px',
-          justifyContent: 'center',
-          pointerEvents: 'none',
-          whiteSpace: 'nowrap'
-        }}>
-          {activeStatuses.map(statusId => {
-            const s = customStatuses.find(st => st.id === statusId);
-            return s ? (
-              <span 
-                key={statusId} 
-                title={s.label} 
-                style={{ fontSize: '15px', filter: 'drop-shadow(0 1px 2px rgba(0,0,0,0.9))' }}
-              >
-                {s.icon}
-              </span>
-            ) : null;
-          })}
         </div>
       )}
 
