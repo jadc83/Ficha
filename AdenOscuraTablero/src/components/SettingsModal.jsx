@@ -6,7 +6,8 @@ const SettingsModal = ({
   customStatuses, onAddCustomStatus, onRemoveCustomStatus,
   onExportCampaign, onImportCampaign,
   fowEnabled, setFowEnabled, fowBrushSize, setFowBrushSize, fowVisionRadius, setFowVisionRadius,
-  fowMemoryEnabled = true, setFowMemoryEnabled, onResetFow, fowMode, setFowMode,
+  fowMemoryEnabled = true, setFowMemoryEnabled, fowAutoHideEnemies = true, setFowAutoHideEnemies,
+  onResetFow, fowMode, setFowMode,
   snapToGrid, setSnapToGrid, gridSize, setGridSize,
   maps, onLoadMapToBoard
 }) => {
@@ -15,6 +16,7 @@ const SettingsModal = ({
   
   const [charName, setCharName] = useState('');
   const [charColor, setCharColor] = useState('#b45309');
+  const [charFaction, setCharFaction] = useState('ally');
   const [charAvatar, setCharAvatar] = useState('');
   const charInputRef = useRef(null);
   const charAvatarInputRef = useRef(null);
@@ -58,6 +60,7 @@ const SettingsModal = ({
       id: Date.now(),
       name: charName.trim(),
       color: charColor,
+      faction: charFaction,
       avatar: charAvatar || null
     });
     setCharName('');
@@ -223,6 +226,18 @@ const SettingsModal = ({
                           <input type="color" value={charColor} onChange={(e) => setCharColor(e.target.value)} style={{ width: '100%', height: '42px', border: '1px solid #8a6d3b', cursor: 'pointer', backgroundColor: 'transparent' }} />
                         </div>
 
+                        <div style={{ width: '150px' }}>
+                          <label style={{ display: 'block', marginBottom: '8px', color: '#c5a059' }}>Rol en Tablero</label>
+                          <select
+                            value={charFaction}
+                            onChange={(e) => setCharFaction(e.target.value)}
+                            style={{ width: '100%', height: '42px', padding: '0 8px', borderRadius: '6px', border: '1px solid #8a6d3b', backgroundColor: '#120b07', color: '#f3e5ab' }}
+                          >
+                            <option value="ally">🛡️ Héroe / Aliado</option>
+                            <option value="enemy">💀 Enemigo / Bestia</option>
+                          </select>
+                        </div>
+
                         <button type="submit" disabled={!charName.trim()} className="vtt-brass-btn" style={{ padding: '10px 22px', borderRadius: '6px', cursor: charName.trim() ? 'pointer' : 'not-allowed', fontWeight: 'bold', height: '42px' }}>+ Inscribir</button>
                       </form>
                     </div>
@@ -284,6 +299,26 @@ const SettingsModal = ({
                           </button>
                         )}
                       </div>
+                    </div>
+
+                    <div className="vtt-wood-panel" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '22px', borderRadius: '10px', gap: '16px' }}>
+                      <div>
+                        <label className="vtt-gothic-title" style={{ display: 'block', color: '#d4af37', fontWeight: 'bold', fontSize: '15px' }}>
+                          Detección Automática de Enemigos por Cono de Visión
+                        </label>
+                        <span style={{ fontSize: '14px', color: '#b89f7d' }}>
+                          Las fichas marcadas como 💀 Enemigo solo aparecerán en la Pantalla de Jugadores cuando estén físicamente dentro del haz de luz de algún héroe (sin muros ni puertas cerradas de por medio).
+                        </span>
+                      </div>
+                      {setFowAutoHideEnemies && (
+                        <button
+                          onClick={() => setFowAutoHideEnemies(!fowAutoHideEnemies)}
+                          className="vtt-brass-btn"
+                          style={{ padding: '10px 18px', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold', color: fowAutoHideEnemies ? '#4ade80' : '#f87171', whiteSpace: 'nowrap' }}
+                        >
+                          {fowAutoHideEnemies ? '🎯 Activa' : '👁️ Siempre Visibles'}
+                        </button>
+                      )}
                     </div>
 
                     <div className="vtt-wood-panel" style={{ padding: '22px', borderRadius: '10px' }}>

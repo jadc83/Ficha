@@ -6,6 +6,7 @@ import TokenSidebar from './components/TokenSidebar';
 import SettingsModal from './components/SettingsModal';
 import DiceRoller from './components/DiceRoller';
 import Soundboard, { playerSoundEngine, SOUND_CATALOG } from './components/Soundboard';
+import { WEATHER_TYPES, AMBIENT_TINTS } from './components/WeatherOverlay';
 import useLocalStorage from './hooks/useLocalStorage';
 
 const ccw = (A, B, C) => (C.y - A.y) * (B.x - A.x) > (B.y - A.y) * (C.x - A.x);
@@ -76,6 +77,11 @@ const App = () => {
   const [fowBrushSize, setFowBrushSize] = useState(100);
   const [fowVisionRadius, setFowVisionRadius] = useLocalStorage('vtt_fowVisionRadius', 180);
   const [fowMemoryEnabled, setFowMemoryEnabled] = useLocalStorage('vtt_fowMemoryEnabled', true);
+  const [fowAutoHideEnemies, setFowAutoHideEnemies] = useLocalStorage('vtt_fowAutoHideEnemies', true);
+
+  const [weatherEffect, setWeatherEffect] = useLocalStorage('vtt_weatherEffect', 'none');
+  const [ambientTint, setAmbientTint] = useLocalStorage('vtt_ambientTint', 'none');
+  const [isWeatherMenuOpen, setIsWeatherMenuOpen] = useState(false);
   
   const [snapToGrid, setSnapToGrid] = useLocalStorage('vtt_snapToGrid', false);
   const [gridSize, setGridSize] = useLocalStorage('vtt_gridSize', 50);
@@ -257,9 +263,10 @@ const App = () => {
 
   useEffect(() => {
     latestStateRef.current = {
-      maps, tokens, fowEnabled, fowActions, fowVisionRadius, fowMemoryEnabled, snapToGrid, gridSize, customStatuses, rulerMeasure
+      maps, tokens, fowEnabled, fowActions, fowVisionRadius, fowMemoryEnabled, fowAutoHideEnemies,
+      weatherEffect, ambientTint, snapToGrid, gridSize, customStatuses, rulerMeasure
     };
-  }, [maps, tokens, fowEnabled, fowActions, fowVisionRadius, fowMemoryEnabled, snapToGrid, gridSize, customStatuses, rulerMeasure]);
+  }, [maps, tokens, fowEnabled, fowActions, fowVisionRadius, fowMemoryEnabled, fowAutoHideEnemies, weatherEffect, ambientTint, snapToGrid, gridSize, customStatuses, rulerMeasure]);
 
   useEffect(() => {
     const channel = new BroadcastChannel('vtt_realtime_sync');
@@ -300,6 +307,9 @@ const App = () => {
           if (payload.fowEnabled !== undefined) setFowEnabled(payload.fowEnabled);
           if (payload.fowVisionRadius !== undefined) setFowVisionRadius(payload.fowVisionRadius);
           if (payload.fowMemoryEnabled !== undefined) setFowMemoryEnabled(payload.fowMemoryEnabled);
+          if (payload.fowAutoHideEnemies !== undefined) setFowAutoHideEnemies(payload.fowAutoHideEnemies);
+          if (payload.weatherEffect !== undefined) setWeatherEffect(payload.weatherEffect);
+          if (payload.ambientTint !== undefined) setAmbientTint(payload.ambientTint);
           if (payload.snapToGrid !== undefined) setSnapToGrid(payload.snapToGrid);
           if (payload.gridSize !== undefined) setGridSize(payload.gridSize);
           if (payload.customStatuses !== undefined) setCustomStatuses(payload.customStatuses);
@@ -313,6 +323,9 @@ const App = () => {
           if (payload.fowActions !== undefined) setFowActions(payload.fowActions);
           if (payload.fowVisionRadius !== undefined) setFowVisionRadius(payload.fowVisionRadius);
           if (payload.fowMemoryEnabled !== undefined) setFowMemoryEnabled(payload.fowMemoryEnabled);
+          if (payload.fowAutoHideEnemies !== undefined) setFowAutoHideEnemies(payload.fowAutoHideEnemies);
+          if (payload.weatherEffect !== undefined) setWeatherEffect(payload.weatherEffect);
+          if (payload.ambientTint !== undefined) setAmbientTint(payload.ambientTint);
           if (payload.snapToGrid !== undefined) setSnapToGrid(payload.snapToGrid);
           if (payload.gridSize !== undefined) setGridSize(payload.gridSize);
           if (payload.customStatuses !== undefined) setCustomStatuses(payload.customStatuses);
@@ -333,7 +346,7 @@ const App = () => {
     }
 
     return () => channel.close();
-  }, [isPlayerView, setTokens, setFowActions, setCustomStatuses, setFowEnabled, setFowVisionRadius, setFowMemoryEnabled, setSnapToGrid, setGridSize]);
+  }, [isPlayerView, setTokens, setFowActions, setCustomStatuses, setFowEnabled, setFowVisionRadius, setFowMemoryEnabled, setFowAutoHideEnemies, setWeatherEffect, setAmbientTint, setSnapToGrid, setGridSize]);
 
   // Enviar mapas SOLO cuando cambian los mapas (evita reenviar imágenes pesadas al girar o mover tokens)
   useEffect(() => {
@@ -355,12 +368,13 @@ const App = () => {
     if (isPlayerView || !syncChannelRef.current) return;
     syncChannelRef.current.postMessage({
       type: 'SYNC_SETTINGS',
-      payload: { fowEnabled, fowVisionRadius, fowMemoryEnabled, snapToGrid, gridSize, customStatuses, rulerMeasure }
+      payload: { fowEnabled, fowVisionRadius, fowMemoryEnabled, fowAutoHideEnemies, weatherEffect, ambientTint, snapToGrid, gridSize, customStatuses, rulerMeasure }
     });
-  }, [isPlayerView, fowEnabled, fowVisionRadius, fowMemoryEnabled, snapToGrid, gridSize, customStatuses, rulerMeasure]);
+  }, [isPlayerView, fowEnabled, fowVisionRadius, fowMemoryEnabled, fowAutoHideEnemies, weatherEffect, ambientTint, snapToGrid, gridSize, customStatuses, rulerMeasure]);
   // Registra un punto de memoria explorada solo cuando la ficha se ha desplazado o girado lo suficiente
   const revealTokenVision = (tokenObj, customX, customY, customRotation, customVisionMode, force = false) => {
     if (!fowEnabled || !fowMemoryEnabled || !tokenObj) return;
+    if (tokenObj.isHidden || tokenObj.faction === 'enemy') return;
     const tknSize = tokenObj.size || gridSize;
     const cx = (customX !== undefined ? customX : tokenObj.x) + tknSize / 2;
     const cy = (customY !== undefined ? customY : tokenObj.y) + tknSize / 2;
@@ -679,14 +693,30 @@ const App = () => {
       size: gridSize,
       rotation: 0,
       visionMode: 'cone',
+      faction: char.faction || 'ally',
+      isHidden: char.faction === 'enemy',
       isLocked: false,
       showName: true,
       statuses: []
     };
     setTokens([...tokens, newToken]);
-    if (fowEnabled) {
+    if (fowEnabled && newToken.faction !== 'enemy' && !newToken.isHidden) {
       revealTokenVision(newToken, spawnX, spawnY, 0, 'cone');
     }
+  };
+
+  const handleToggleTokenHidden = (tokenId) => {
+    setTokens(prev => prev.map(t => t.id === tokenId ? { ...t, isHidden: !t.isHidden } : t));
+  };
+
+  const handleToggleTokenFaction = (tokenId) => {
+    setTokens(prev => prev.map(t => {
+      if (t.id === tokenId) {
+        const nextFaction = t.faction === 'enemy' ? 'ally' : 'enemy';
+        return { ...t, faction: nextFaction };
+      }
+      return t;
+    }));
   };
 
   const handleToggleTokenName = (tokenId) => {
@@ -772,6 +802,8 @@ const App = () => {
           onRemoveToken={(id) => setTokens(tokens.filter(t => t.id !== id))}
           onRemoveCharacter={(id) => setCharacters(characters.filter(c => c.id !== id))}
           onToggleTokenName={handleToggleTokenName}
+          onToggleTokenHidden={handleToggleTokenHidden}
+          onToggleTokenFaction={handleToggleTokenFaction}
           customStatuses={customStatuses}
         />
       )}
@@ -805,6 +837,9 @@ const App = () => {
           fowMode={fowMode}
           fowVisionRadius={fowVisionRadius}
           fowMemoryEnabled={fowMemoryEnabled}
+          fowAutoHideEnemies={fowAutoHideEnemies}
+          weatherEffect={weatherEffect}
+          ambientTint={ambientTint}
           rulerActive={rulerActive}
           pingActive={pingActive}
           handlePointerDown={handlePointerDown} handlePointerMove={handlePointerMove}
@@ -815,6 +850,8 @@ const App = () => {
           onTokenPointerDown={handleTokenPointerDown}
           onStartTokenRotate={handleStartTokenRotate}
           onToggleTokenLock={(tokenId) => setTokens(tokens.map(t => t.id === tokenId ? { ...t, isLocked: !t.isLocked } : t))}
+          onToggleTokenHidden={handleToggleTokenHidden}
+          onToggleTokenFaction={handleToggleTokenFaction}
           onUpdateTokenSize={(tokenId, newSize) => setTokens(tokens.map(t => t.id === tokenId ? { ...t, size: newSize } : t))}
           onUpdateTokenRotation={handleUpdateTokenRotation}
           onUpdateTokenVisionMode={handleUpdateTokenVisionMode}
@@ -825,6 +862,98 @@ const App = () => {
           onToggleDoor={handleToggleDoor}
           onToggleWindow={handleToggleWindow}
         />
+
+        {!isPlayerView && isWeatherMenuOpen && (
+          <div
+            onPointerDown={(e) => e.stopPropagation()}
+            onWheel={(e) => e.stopPropagation()}
+            className="vtt-wood-panel"
+            style={{
+              position: 'fixed',
+              bottom: '74px',
+              left: '50%',
+              transform: 'translateX(-50%)',
+              width: '360px',
+              borderRadius: '10px',
+              border: '2px solid #8a6d3b',
+              padding: '14px',
+              zIndex: 5001,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '12px',
+              color: '#e6d5b8'
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #6b4c2b', paddingBottom: '6px' }}>
+              <span className="vtt-gothic-title" style={{ fontSize: '13px', color: '#d4af37', fontWeight: 'bold' }}>
+                ⛈️ Clima e Iluminación Ambiental
+              </span>
+              <button
+                onClick={() => setIsWeatherMenuOpen(false)}
+                style={{ background: 'transparent', border: 'none', color: '#c5a059', cursor: 'pointer', fontSize: '15px' }}
+              >
+                ✕
+              </button>
+            </div>
+
+            <div>
+              <span className="vtt-gothic-title" style={{ fontSize: '11px', color: '#c5a059', display: 'block', marginBottom: '6px' }}>
+                Partículas en Pantalla
+              </span>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
+                {WEATHER_TYPES.map(w => (
+                  <button
+                    key={w.id}
+                    onClick={() => setWeatherEffect(w.id)}
+                    style={{
+                      padding: '6px 8px',
+                      borderRadius: '6px',
+                      border: weatherEffect === w.id ? '1px solid #fbbf24' : '1px solid #5c4028',
+                      background: weatherEffect === w.id ? 'linear-gradient(180deg, #b45309 0%, #78350f 100%)' : '#120b07',
+                      color: '#f3e5ab',
+                      cursor: 'pointer',
+                      fontSize: '12px',
+                      fontWeight: 'bold',
+                      textAlign: 'left',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px'
+                    }}
+                  >
+                    <span>{w.icon}</span>
+                    <span>{w.label}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <span className="vtt-gothic-title" style={{ fontSize: '11px', color: '#c5a059', display: 'block', marginBottom: '6px' }}>
+                Tinte de Iluminación
+              </span>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
+                {AMBIENT_TINTS.map(t => (
+                  <button
+                    key={t.id}
+                    onClick={() => setAmbientTint(t.id)}
+                    style={{
+                      padding: '6px 8px',
+                      borderRadius: '6px',
+                      border: ambientTint === t.id ? '1px solid #fbbf24' : '1px solid #5c4028',
+                      background: ambientTint === t.id ? 'linear-gradient(180deg, #b45309 0%, #78350f 100%)' : '#120b07',
+                      color: '#f3e5ab',
+                      cursor: 'pointer',
+                      fontSize: '12px',
+                      fontWeight: 'bold'
+                    }}
+                  >
+                    {t.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Barra flotante Gótica / Barroca de navegación y vista */}
         <div
@@ -924,6 +1053,31 @@ const App = () => {
                 🔔 Señalar
               </button>
 
+              {!isPlayerView && (
+                <button
+                  onClick={() => setIsWeatherMenuOpen(!isWeatherMenuOpen)}
+                  style={{
+                    padding: '6px 12px',
+                    borderRadius: '6px',
+                    fontFamily: "'Cinzel', serif",
+                    border: (weatherEffect !== 'none' || ambientTint !== 'none' || isWeatherMenuOpen) ? '1px solid #fbbf24' : '1px solid #8a6d3b',
+                    background: (weatherEffect !== 'none' || ambientTint !== 'none' || isWeatherMenuOpen)
+                      ? 'linear-gradient(180deg, #b45309 0%, #78350f 100%)'
+                      : 'linear-gradient(180deg, #3a2618 0%, #21150d 100%)',
+                    color: '#e6d5b8',
+                    cursor: 'pointer',
+                    fontSize: '12px',
+                    fontWeight: 'bold',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '5px'
+                  }}
+                  title="Configurar Clima e Iluminación Ambiental"
+                >
+                  ⛈️ Clima
+                </button>
+              )}
+
               <div style={{ width: '1px', height: '22px', backgroundColor: '#6b4c2b' }} />
 
               <button
@@ -986,6 +1140,7 @@ const App = () => {
           fowBrushSize={fowBrushSize} setFowBrushSize={setFowBrushSize}
           fowVisionRadius={fowVisionRadius} setFowVisionRadius={setFowVisionRadius}
           fowMemoryEnabled={fowMemoryEnabled} setFowMemoryEnabled={setFowMemoryEnabled}
+          fowAutoHideEnemies={fowAutoHideEnemies} setFowAutoHideEnemies={setFowAutoHideEnemies}
           onResetFow={() => { lastFowTrailRef.current = {}; setFowActions([]); }}
           fowMode={fowMode} setFowMode={setFowMode}
           snapToGrid={snapToGrid} setSnapToGrid={setSnapToGrid} gridSize={gridSize} setGridSize={handleGridSizeChange}

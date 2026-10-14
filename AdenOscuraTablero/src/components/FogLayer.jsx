@@ -23,12 +23,11 @@ const raySegmentIntersection = (ox, oy, dx, dy, x1, y1, x2, y2) => {
 
 // Normaliza un ángulo al rango [-180, 180] respecto a una dirección central
 const angleDiff = (a, b) => {
-  let d = ((a - b + 180) % 360 + 360) % 360 - 180;
-  return d;
+  return ((a - b + 180) % 360 + 360) % 360 - 180;
 };
 
 // Extrae todos los segmentos que bloquean la visión (muros y puertas cerradas; las ventanas dejan pasar la luz)
-const getVisionBlockers = (maps = []) => {
+export const getVisionBlockers = (maps = []) => {
   const segments = [];
   for (const el of maps) {
     if (el.type === 'wall') {
@@ -44,6 +43,53 @@ const getVisionBlockers = (maps = []) => {
     }
   }
   return segments;
+};
+
+// Determina matemáticamente si un punto (tx, ty) es visto por al menos un token aliado
+export const isPointVisibleToPlayers = (tx, ty, viewerTokens = [], maps = [], visionRadius = 180) => {
+  const blockers = getVisionBlockers(maps);
+
+  for (let i = 0; i < viewerTokens.length; i++) {
+    const viewer = viewerTokens[i];
+    if (viewer.isHidden || viewer.faction === 'enemy') continue;
+
+    const size = viewer.size || 50;
+    const ox = viewer.x + size / 2;
+    const oy = viewer.y + size / 2;
+    const dx = tx - ox;
+    const dy = ty - oy;
+    const dist = Math.hypot(dx, dy);
+
+    if (dist > visionRadius) continue;
+
+    const personalRadius = Math.max(size * 0.85, 36);
+    const fov = viewer.visionMode === 'circle' ? 360 : 90;
+
+    if (fov < 360 && dist > personalRadius) {
+      const targetAngle = (Math.atan2(dy, dx) * 180) / Math.PI;
+      const diff = Math.abs(angleDiff(targetAngle, viewer.rotation || 0));
+      if (diff > fov / 2) continue;
+    }
+
+    if (dist < 2) return true;
+
+    const rayDx = dx / dist;
+    const rayDy = dy / dist;
+    let blocked = false;
+
+    for (let j = 0; j < blockers.length; j++) {
+      const seg = blockers[j];
+      const hitT = raySegmentIntersection(ox, oy, rayDx, rayDy, seg.x1, seg.y1, seg.x2, seg.y2);
+      if (hitT !== null && hitT < dist - 2) {
+        blocked = true;
+        break;
+      }
+    }
+
+    if (!blocked) return true;
+  }
+
+  return false;
 };
 
 // Calcula el polígono de visión combinando barrido angular fino + rayos exactos a los vértices de muros
@@ -137,7 +183,18 @@ const tracePolygonPath = (ctx, cx, cy, points, isFullCircle) => {
   ctx.closePath();
 };
 
-const drawTokenVisionMask = (ctx, ox, oy, radius, angleDeg = 0, fovDeg = 90, tokenSize = 50, blockers = [], eraseAlpha = 1, compositeOp = 'destination-out') => {
+const drawTokenVisionMask = (
+  ctx,
+  ox,
+  oy,
+  radius,
+  angleDeg = 0,
+  fovDeg = 90,
+  tokenSize = 50,
+  blockers = [],
+  eraseAlpha = 1,
+  compositeOp = 'destination-out'
+) => {
   if (!Number.isFinite(ox) || !Number.isFinite(oy) || !Number.isFinite(radius) || radius <= 0) return;
   const cx = ox + CANVAS_OFFSET;
   const cy = oy + CANVAS_OFFSET;
@@ -183,7 +240,6 @@ const FogLayer = ({
   fowMemoryEnabled = true,
   isPlayerView = false
 }) => {
-  // cacheCanvasRef guarda la niebla base y pinceladas manuales; memoryCanvasRef guarda la máscara de penumbra explorada sin sobreacumularse
   const cacheCanvasRef = useRef(null);
   const memoryCanvasRef = useRef(null);
   const processedCountRef = useRef(0);
@@ -232,7 +288,6 @@ const FogLayer = ({
       lastBlockersKeyRef.current = blockersKey;
     }
 
-    // Procesar únicamente las acciones nuevas pendientes
     for (let i = processedCountRef.current; i < fowActions.length; i++) {
       const action = fowActions[i];
       if (!action || !Number.isFinite(action.x) || !Number.isFinite(action.y)) continue;
@@ -240,7 +295,6 @@ const FogLayer = ({
       if (action.type === 'reveal') {
         if (action.mode === 'token') {
           if (fowMemoryEnabled) {
-            // Pintamos la zona explorada en el lienzo de memoria con source-over para que girar en el sitio no borre de más la penumbra
             const fov = action.visionMode === 'circle' ? 360 : (action.fov || 90);
             drawTokenVisionMask(
               memoryCtx,
@@ -256,7 +310,6 @@ const FogLayer = ({
             );
           }
         } else {
-          // El pincel manual del Master despeja el 100% de la niebla en esa zona
           const r = Math.max(5, action.radius || 50);
           const cx = action.x + CANVAS_OFFSET;
           const cy = action.y + CANVAS_OFFSET;
@@ -295,13 +348,11 @@ const FogLayer = ({
     }
     processedCountRef.current = fowActions.length;
 
-    // 1. Volcar la niebla estática sobre el lienzo visible
     const ctx = canvas.getContext('2d');
     ctx.globalCompositeOperation = 'source-over';
     ctx.clearRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
     ctx.drawImage(cacheCanvas, 0, 0);
 
-    // 2. Aplicar la penumbra explorada en una única pasada uniforme (48% de claridad máxima)
     if (fowMemoryEnabled) {
       ctx.save();
       ctx.globalCompositeOperation = 'destination-out';
@@ -310,8 +361,8 @@ const FogLayer = ({
       ctx.restore();
     }
 
-    // 3. Visión activa en tiempo real de cada ficha en el tablero (100% nítida)
     tokens.forEach(token => {
+      if (token.isHidden || token.faction === 'enemy') return;
       const size = token.size || 50;
       const cx = token.x + size / 2;
       const cy = token.y + size / 2;
@@ -322,7 +373,6 @@ const FogLayer = ({
     ctx.globalCompositeOperation = 'source-over';
   }, [fowActions, fowEnabled, fowCanvasRef, maps, tokens, fowVisionRadius, fowMemoryEnabled]);
 
-  // Reiniciar caché si cambia el modo de memoria
   useEffect(() => {
     processedCountRef.current = 0;
   }, [fowMemoryEnabled]);
@@ -340,7 +390,6 @@ const FogLayer = ({
         left: -CANVAS_OFFSET,
         pointerEvents: 'none',
         zIndex: 5,
-        // En la pantalla de Jugadores la niebla no explorada es 100% opaca; al Master le permite entrever el mapa (78%)
         opacity: isPlayerView ? 1 : 0.78
       }}
     />

@@ -1,17 +1,21 @@
 import React from 'react';
 import GridLayer from './GridLayer';
 import MapLayer from './MapLayer';
-import FogLayer from './FogLayer';
+import FogLayer, { isPointVisibleToPlayers } from './FogLayer';
 import GameToken from './GameToken';
+import WeatherOverlay from './WeatherOverlay';
 
 const GameBoard = ({
   boardRef, scale, pan = { x: 0, y: 0 }, isDraggingPan = false, isPlayerView = false,
-  fowEnabled, fowMode = 'none', fowVisionRadius = 180, fowMemoryEnabled = true, rulerActive = false, pingActive = false,
+  fowEnabled, fowMode = 'none', fowVisionRadius = 180, fowMemoryEnabled = true, fowAutoHideEnemies = true,
+  weatherEffect = 'none', ambientTint = 'none',
+  rulerActive = false, pingActive = false,
   handlePointerDown, handlePointerMove, handlePointerUp, handleWheel,
   snapToGrid, gridSize, maps,
   fowCanvasRef, fowActions,
-  tokens, draggedToken, rotatingToken, onTokenPointerDown, onStartTokenRotate, onToggleTokenLock, onUpdateTokenSize,
-  onUpdateTokenRotation, onUpdateTokenVisionMode, onToggleTokenStatus, customStatuses,
+  tokens, draggedToken, rotatingToken, onTokenPointerDown, onStartTokenRotate,
+  onToggleTokenLock, onToggleTokenHidden, onToggleTokenFaction,
+  onUpdateTokenSize, onUpdateTokenRotation, onUpdateTokenVisionMode, onToggleTokenStatus, customStatuses,
   rulerMeasure, pings = [], onToggleDoor, onToggleWindow
 }) => {
   const isToolActive = rulerActive || pingActive || (!isPlayerView && fowEnabled && fowMode !== 'none');
@@ -115,22 +119,37 @@ const GameBoard = ({
           isPlayerView={isPlayerView}
         />
 
-        {tokens.map((token) => (
-          <GameToken
-            key={token.id} token={token}
-            isDragging={draggedToken === token.id}
-            isRotating={rotatingToken === token.id}
-            isPlayerView={isPlayerView}
-            onPointerDown={onTokenPointerDown}
-            onStartRotate={onStartTokenRotate}
-            onToggleLock={onToggleTokenLock}
-            onUpdateSize={onUpdateTokenSize}
-            onUpdateRotation={onUpdateTokenRotation}
-            onUpdateVisionMode={onUpdateTokenVisionMode}
-            onToggleStatus={onToggleTokenStatus}
-            customStatuses={customStatuses}
-          />
-        ))}
+        {tokens.map((token) => {
+          if (isPlayerView) {
+            if (token.isHidden) return null;
+            if (fowEnabled && fowAutoHideEnemies && token.faction === 'enemy') {
+              const size = token.size || 50;
+              const tx = token.x + size / 2;
+              const ty = token.y + size / 2;
+              const seen = isPointVisibleToPlayers(tx, ty, tokens, maps, fowVisionRadius);
+              if (!seen) return null;
+            }
+          }
+
+          return (
+            <GameToken
+              key={token.id} token={token}
+              isDragging={draggedToken === token.id}
+              isRotating={rotatingToken === token.id}
+              isPlayerView={isPlayerView}
+              onPointerDown={onTokenPointerDown}
+              onStartRotate={onStartTokenRotate}
+              onToggleLock={onToggleTokenLock}
+              onToggleHidden={onToggleTokenHidden}
+              onToggleFaction={onToggleTokenFaction}
+              onUpdateSize={onUpdateTokenSize}
+              onUpdateRotation={onUpdateTokenRotation}
+              onUpdateVisionMode={onUpdateTokenVisionMode}
+              onToggleStatus={onToggleTokenStatus}
+              customStatuses={customStatuses}
+            />
+          );
+        })}
 
         {renderRuler()}
 
@@ -174,6 +193,8 @@ const GameBoard = ({
           </div>
         ))}
       </div>
+
+      <WeatherOverlay weather={weatherEffect} ambientTint={ambientTint} />
     </div>
   );
 };

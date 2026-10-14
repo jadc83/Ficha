@@ -21,6 +21,8 @@ const GameToken = ({
   onPointerDown,
   onStartRotate,
   onToggleLock,
+  onToggleHidden,
+  onToggleFaction,
   onUpdateSize,
   onUpdateRotation,
   onUpdateVisionMode,
@@ -34,6 +36,8 @@ const GameToken = ({
   const currentSize = token.size || 50;
   const rotation = token.rotation || 0;
   const visionMode = token.visionMode || 'cone';
+  const faction = token.faction || 'ally';
+  const isHidden = Boolean(token.isHidden);
   const activeStatuses = token.statuses || [];
 
   useEffect(() => {
@@ -105,11 +109,18 @@ const GameToken = ({
         backgroundColor: token.color,
         borderRadius: '50%',
         cursor: token.isLocked ? 'not-allowed' : (isDragging || isRotating ? 'grabbing' : 'grab'),
-        boxShadow: '0 6px 14px rgba(0,0,0,0.85), inset 0 0 8px rgba(0,0,0,0.6)',
+        boxShadow: faction === 'enemy'
+          ? '0 6px 14px rgba(0,0,0,0.9), 0 0 10px rgba(220, 38, 38, 0.45)'
+          : '0 6px 14px rgba(0,0,0,0.85), inset 0 0 8px rgba(0,0,0,0.6)',
         border: token.isLocked
           ? '3px solid #dc2626'
+          : isHidden
+          ? '3px dashed #a855f7'
+          : faction === 'enemy'
+          ? '3px solid #ef4444'
           : `3px solid ${token.color || '#d4af37'}`,
         outline: isRotating ? '2px solid #fbbf24' : '1px solid #d4af37',
+        opacity: !isPlayerView && isHidden ? 0.52 : 1,
         zIndex: isDragging || isRotating ? 100 : 10,
         display: 'flex',
         alignItems: 'center',
@@ -121,6 +132,32 @@ const GameToken = ({
       }}
       title="Arrastra la punta dorada (o Shift + Arrastrar) para orientar el cono con el ratón | Shift + Rueda para giro fino"
     >
+      {/* Indicador de Sigilo para el Master */}
+      {!isPlayerView && isHidden && (
+        <div
+          style={{
+            position: 'absolute',
+            bottom: '-8px',
+            right: '-8px',
+            backgroundColor: '#3b0764',
+            border: '1px solid #c084fc',
+            borderRadius: '50%',
+            width: '22px',
+            height: '22px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontSize: '12px',
+            zIndex: 15,
+            pointerEvents: 'none',
+            boxShadow: '0 2px 6px rgba(0,0,0,0.9)'
+          }}
+          title="En Sigilo (Invisible en Pantalla de Jugadores)"
+        >
+          👻
+        </div>
+      )}
+
       {/* Haz sutil del Cono de Visión y Tirador de Orientación */}
       <div
         style={{
@@ -236,8 +273,8 @@ const GameToken = ({
           onPointerDown={(e) => e.stopPropagation()}
           style={{
             position: 'fixed', 
-            top: `${Math.min(menuState.y, window.innerHeight - 390)}px`, 
-            left: `${Math.min(menuState.x, window.innerWidth - 220)}px`,
+            top: `${Math.min(menuState.y, window.innerHeight - 450)}px`, 
+            left: `${Math.min(menuState.x, window.innerWidth - 230)}px`,
             background: 'linear-gradient(180deg, #261810 0%, #140c08 100%)', 
             padding: '14px', 
             borderRadius: '8px',
@@ -248,13 +285,61 @@ const GameToken = ({
             display: 'flex', 
             flexDirection: 'column', 
             gap: '10px',
-            width: '205px',
+            width: '215px',
             color: '#e6d5b8',
             fontFamily: "'Crimson Text', Georgia, serif"
           }}
         >
           <div className="vtt-gothic-title" style={{ fontSize: '13px', color: '#d4af37', textAlign: 'center', borderBottom: '1px solid #6b4c2b', paddingBottom: '6px' }}>
             ⚜️ {token.name}
+          </div>
+
+          <div style={{ display: 'flex', gap: '6px' }}>
+            <button
+              onPointerDown={(e) => {
+                e.stopPropagation();
+                e.preventDefault();
+                if (onToggleHidden) onToggleHidden(token.id);
+              }}
+              style={{
+                flex: 1,
+                cursor: 'pointer',
+                padding: '6px 8px',
+                borderRadius: '4px',
+                fontWeight: 'bold',
+                fontSize: '11px',
+                fontFamily: "'Cinzel', serif",
+                background: isHidden ? 'linear-gradient(180deg, #6b21a8 0%, #3b0764 100%)' : '#1c120c',
+                border: isHidden ? '1px solid #c084fc' : '1px solid #8a6d3b',
+                color: isHidden ? '#f3e8ff' : '#e6d5b8'
+              }}
+              title="Oculta o revela esta ficha en la pantalla de los jugadores"
+            >
+              {isHidden ? '👻 Oculto' : '👁️ Visible'}
+            </button>
+
+            <button
+              onPointerDown={(e) => {
+                e.stopPropagation();
+                e.preventDefault();
+                if (onToggleFaction) onToggleFaction(token.id);
+              }}
+              style={{
+                flex: 1,
+                cursor: 'pointer',
+                padding: '6px 8px',
+                borderRadius: '4px',
+                fontWeight: 'bold',
+                fontSize: '11px',
+                fontFamily: "'Cinzel', serif",
+                background: faction === 'enemy' ? 'linear-gradient(180deg, #991b1b 0%, #450a0a 100%)' : 'linear-gradient(180deg, #1e3a8a 0%, #172554 100%)',
+                border: faction === 'enemy' ? '1px solid #f87171' : '1px solid #60a5fa',
+                color: '#fff'
+              }}
+              title="Los Aliados iluminan la niebla; los Enemigos solo se ven cuando entran en el cono de visión de un Aliado"
+            >
+              {faction === 'enemy' ? '💀 Enemigo' : '🛡️ Aliado'}
+            </button>
           </div>
 
           <button
