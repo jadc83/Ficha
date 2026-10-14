@@ -54,7 +54,6 @@ const DiceRoller = () => {
 
   return (
     <>
-      {}
       {screenRoll && (
         <div
           onClick={() => setScreenRoll(null)}
@@ -63,39 +62,42 @@ const DiceRoller = () => {
             top: '75px',
             left: '50%',
             transform: 'translateX(-50%)',
-            backgroundColor: 'rgba(17, 24, 39, 0.95)',
-            border: '2px solid #f59e0b',
-            borderRadius: '12px',
-            padding: '16px 28px',
-            color: 'white',
+            background: 'linear-gradient(180deg, rgba(38, 24, 16, 0.98) 0%, rgba(18, 11, 7, 0.98) 100%)',
+            border: '3px double #d4af37',
+            borderRadius: '10px',
+            padding: '18px 34px',
+            color: '#f3e5ab',
             zIndex: 99999,
-            boxShadow: '0 15px 35px rgba(0,0,0,0.8), 0 0 20px rgba(245, 158, 11, 0.3)',
+            boxShadow: '0 20px 45px rgba(0,0,0,0.95), 0 0 25px rgba(212, 175, 55, 0.35)',
             display: 'flex',
             flexDirection: 'column',
             alignItems: 'center',
             gap: '6px',
             cursor: 'pointer',
             userSelect: 'none',
-            minWidth: '220px'
+            minWidth: '240px'
           }}
           title="Haz clic para cerrar"
         >
-          <div style={{ fontSize: '13px', color: '#fcd34d', fontWeight: 'bold', letterSpacing: '1px', textTransform: 'uppercase' }}>
-            🎲 Tirada: {screenRoll.formula}
+          <div className="vtt-gothic-title" style={{ fontSize: '13px', color: '#d4af37', fontWeight: 'bold' }}>
+            ⚜️ Destino: {screenRoll.formula}
           </div>
-          <div style={{
-            fontSize: '44px',
-            fontWeight: '900',
-            lineHeight: '1',
-            color: (screenRoll.rolls.length === 1 && screenRoll.diceSides === 20 && screenRoll.rolls[0] === 20)
-              ? '#10b981'
-              : (screenRoll.rolls.length === 1 && screenRoll.diceSides === 20 && screenRoll.rolls[0] === 1)
-              ? '#ef4444'
-              : '#ffffff'
-          }}>
+          <div
+            className="vtt-gothic-title"
+            style={{
+              fontSize: '46px',
+              fontWeight: '900',
+              lineHeight: '1',
+              color: (screenRoll.rolls.length === 1 && screenRoll.diceSides === 20 && screenRoll.rolls[0] === 20)
+                ? '#4ade80'
+                : (screenRoll.rolls.length === 1 && screenRoll.diceSides === 20 && screenRoll.rolls[0] === 1)
+                ? '#f87171'
+                : '#fffbeb'
+            }}
+          >
             {screenRoll.total}
           </div>
-          <div style={{ fontSize: '13px', color: '#9ca3af', marginTop: '2px' }}>
+          <div style={{ fontSize: '14px', color: '#c5a059', marginTop: '2px' }}>
             Dados: [{screenRoll.rolls.join(', ')}]
             {screenRoll.modifier !== 0 && (
               <span> {screenRoll.modifier > 0 ? `+ ${screenRoll.modifier}` : `- ${Math.abs(screenRoll.modifier)}`}</span>
@@ -104,7 +106,6 @@ const DiceRoller = () => {
         </div>
       )}
 
-      {}
       <div
         onPointerDown={(e) => e.stopPropagation()}
         onWheel={(e) => e.stopPropagation()}
@@ -119,61 +120,63 @@ const DiceRoller = () => {
         }}
       >
         {isOpen && (
-          <div style={{
-            width: '300px',
-            backgroundColor: '#1f2937',
-            border: '1px solid #374151',
-            borderRadius: '12px',
-            padding: '16px',
-            marginBottom: '10px',
-            boxShadow: '0 10px 30px rgba(0,0,0,0.75)',
-            color: 'white',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: '14px'
-          }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #374151', paddingBottom: '8px' }}>
-              <span style={{ fontWeight: 'bold', fontSize: '15px', color: '#f3f4f6' }}>🎲 Lanzador de Dados</span>
+          <div
+            className="vtt-wood-panel"
+            style={{
+              width: '310px',
+              borderRadius: '10px',
+              padding: '16px',
+              marginBottom: '10px',
+              border: '2px solid #8a6d3b',
+              color: '#e6d5b8',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '14px'
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #6b4c2b', paddingBottom: '8px' }}>
+              <span className="vtt-gothic-title" style={{ fontWeight: 'bold', fontSize: '14px', color: '#d4af37' }}>🎲 Cubilete del Destino</span>
               <button
                 onClick={() => setIsOpen(false)}
-                style={{ background: 'transparent', border: 'none', color: '#9ca3af', cursor: 'pointer', fontSize: '16px' }}
+                style={{ background: 'transparent', border: 'none', color: '#c5a059', cursor: 'pointer', fontSize: '16px' }}
               >
                 ✕
               </button>
             </div>
 
-            {}
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span style={{ fontSize: '13px', color: '#d1d5db' }}>Número de dados:</span>
+              <span style={{ fontSize: '14px', color: '#e6d5b8' }}>Cantidad de dados:</span>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <button
                   onClick={() => setDiceCount(Math.max(1, diceCount - 1))}
-                  style={{ width: '28px', height: '28px', borderRadius: '6px', border: '1px solid #4b5563', backgroundColor: '#374151', color: 'white', cursor: 'pointer', fontWeight: 'bold' }}
+                  className="vtt-brass-btn"
+                  style={{ width: '28px', height: '28px', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold' }}
                 >-</button>
-                <span style={{ width: '28px', textAlign: 'center', fontWeight: 'bold', fontSize: '15px' }}>{diceCount}</span>
+                <span className="vtt-gothic-title" style={{ width: '28px', textAlign: 'center', fontWeight: 'bold', fontSize: '15px', color: '#f3e5ab' }}>{diceCount}</span>
                 <button
                   onClick={() => setDiceCount(Math.min(30, diceCount + 1))}
-                  style={{ width: '28px', height: '28px', borderRadius: '6px', border: '1px solid #4b5563', backgroundColor: '#374151', color: 'white', cursor: 'pointer', fontWeight: 'bold' }}
+                  className="vtt-brass-btn"
+                  style={{ width: '28px', height: '28px', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold' }}
                 >+</button>
               </div>
             </div>
 
-            {}
             <div>
-              <span style={{ fontSize: '13px', color: '#d1d5db', display: 'block', marginBottom: '6px' }}>Caras del dado:</span>
+              <span style={{ fontSize: '14px', color: '#e6d5b8', display: 'block', marginBottom: '6px' }}>Poliedro:</span>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '6px' }}>
                 {DICE_TYPES.map(sides => (
                   <button
                     key={sides}
                     onClick={() => setDiceSides(sides)}
+                    className="vtt-gothic-title"
                     style={{
                       padding: '6px 4px',
                       borderRadius: '6px',
-                      border: diceSides === sides ? '1px solid #60a5fa' : '1px solid #374151',
-                      backgroundColor: diceSides === sides ? '#2563eb' : '#111827',
-                      color: 'white',
+                      border: diceSides === sides ? '1px solid #fbbf24' : '1px solid #6b4c2b',
+                      background: diceSides === sides ? 'linear-gradient(180deg, #b45309 0%, #78350f 100%)' : '#120b07',
+                      color: '#f3e5ab',
                       fontWeight: 'bold',
-                      fontSize: '13px',
+                      fontSize: '12px',
                       cursor: 'pointer'
                     }}
                   >
@@ -183,64 +186,58 @@ const DiceRoller = () => {
               </div>
             </div>
 
-            {}
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span style={{ fontSize: '13px', color: '#d1d5db' }}>Bonificador / Reductor:</span>
+              <span style={{ fontSize: '14px', color: '#e6d5b8' }}>Modificador:</span>
               <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                 <button
                   onClick={() => setModifier(modifier - 1)}
-                  style={{ width: '28px', height: '28px', borderRadius: '6px', border: '1px solid #4b5563', backgroundColor: '#374151', color: 'white', cursor: 'pointer', fontWeight: 'bold' }}
+                  className="vtt-brass-btn"
+                  style={{ width: '28px', height: '28px', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold' }}
                 >-</button>
-                <span style={{
+                <span className="vtt-gothic-title" style={{
                   minWidth: '36px',
                   textAlign: 'center',
                   fontWeight: 'bold',
                   fontSize: '15px',
-                  color: modifier > 0 ? '#34d399' : modifier < 0 ? '#f87171' : 'white'
+                  color: modifier > 0 ? '#4ade80' : modifier < 0 ? '#f87171' : '#f3e5ab'
                 }}>
                   {modifier > 0 ? `+${modifier}` : modifier}
                 </span>
                 <button
                   onClick={() => setModifier(modifier + 1)}
-                  style={{ width: '28px', height: '28px', borderRadius: '6px', border: '1px solid #4b5563', backgroundColor: '#374151', color: 'white', cursor: 'pointer', fontWeight: 'bold' }}
+                  className="vtt-brass-btn"
+                  style={{ width: '28px', height: '28px', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold' }}
                 >+</button>
-                {modifier !== 0 && (
-                  <button
-                    onClick={() => setModifier(0)}
-                    style={{ fontSize: '11px', padding: '4px 6px', borderRadius: '4px', background: '#111827', color: '#9ca3af', border: '1px solid #374151', cursor: 'pointer' }}
-                    title="Resetear a 0"
-                  >0</button>
-                )}
               </div>
             </div>
 
-            {}
             <button
               onClick={handleRoll}
+              className="vtt-gothic-title"
               style={{
                 padding: '10px',
-                borderRadius: '8px',
-                border: 'none',
-                backgroundColor: '#f59e0b',
-                color: '#111827',
-                fontWeight: '900',
-                fontSize: '15px',
+                borderRadius: '6px',
+                border: '1px solid #fbbf24',
+                background: 'linear-gradient(180deg, #b45309 0%, #78350f 100%)',
+                color: '#fffbeb',
+                fontWeight: 'bold',
+                fontSize: '14px',
                 cursor: 'pointer',
-                boxShadow: '0 4px 10px rgba(245, 158, 11, 0.3)',
+                boxShadow: '0 4px 12px rgba(0,0,0,0.7)',
                 transform: isRollingAnim ? 'scale(0.97)' : 'scale(1)',
                 transition: 'transform 0.1s'
               }}
             >
-              🎲 Tirar ({currentFormula})
+              🎲 Lanzar ({currentFormula})
             </button>
 
             {history.length > 0 && (
-              <div style={{ borderTop: '1px solid #374151', paddingTop: '8px', maxHeight: '110px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                <span style={{ fontSize: '11px', color: '#9ca3af', fontWeight: 'bold' }}>Últimas tiradas:</span>
+              <div style={{ borderTop: '1px solid #6b4c2b', paddingTop: '8px', maxHeight: '110px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <span className="vtt-gothic-title" style={{ fontSize: '10px', color: '#c5a059' }}>Crónica de Tiradas:</span>
                 {history.map(item => (
-                  <div key={item.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', backgroundColor: '#111827', padding: '4px 8px', borderRadius: '4px' }}>
-                    <span style={{ color: '#d1d5db' }}>{item.formula} <span style={{ color: '#6b7280' }}>[{item.rolls.join(',')}]</span></span>
-                    <strong style={{ color: '#fcd34d' }}>= {item.total}</strong>
+                  <div key={item.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', backgroundColor: '#120b07', border: '1px solid #4a331d', padding: '4px 8px', borderRadius: '4px' }}>
+                    <span style={{ color: '#e6d5b8' }}>{item.formula} <span style={{ color: '#8a6d3b' }}>[{item.rolls.join(',')}]</span></span>
+                    <strong style={{ color: '#fbbf24' }}>= {item.total}</strong>
                   </div>
                 ))}
               </div>
@@ -248,25 +245,22 @@ const DiceRoller = () => {
           </div>
         )}
 
-        {/* Botón/Pestaña Discreta */}
         <button
           onClick={() => setIsOpen(!isOpen)}
+          className="vtt-brass-btn"
           style={{
-            padding: '10px 16px',
-            borderRadius: '999px',
-            backgroundColor: isOpen ? '#f59e0b' : '#1f2937',
-            color: isOpen ? '#111827' : 'white',
-            border: '1px solid #374151',
-            boxShadow: '0 4px 12px rgba(0,0,0,0.6)',
+            padding: '10px 18px',
+            borderRadius: '8px',
+            border: '2px solid #8a6d3b',
             cursor: 'pointer',
             fontWeight: 'bold',
-            fontSize: '14px',
+            fontSize: '13px',
             display: 'flex',
             alignItems: 'center',
             gap: '8px'
           }}
         >
-          🎲 {isOpen ? 'Cerrar Dados' : 'Tirar Dados'}
+          🎲 {isOpen ? 'Cerrar Dados' : 'Dados'}
         </button>
       </div>
     </>

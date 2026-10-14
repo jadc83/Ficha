@@ -319,14 +319,14 @@ const Soundboard = ({ onTriggerSound, onStopAllSounds, activeLoops = [], masterT
           position: 'fixed',
           top: '75px',
           right: '25px',
-          backgroundColor: 'rgba(17, 24, 39, 0.95)',
-          border: '1px solid #10b981',
-          borderLeft: '5px solid #10b981',
+          background: 'linear-gradient(180deg, rgba(38, 24, 16, 0.96) 0%, rgba(18, 11, 7, 0.98) 100%)',
+          border: '2px solid #d4af37',
+          borderLeft: '6px solid #d4af37',
           borderRadius: '8px',
           padding: '12px 18px',
-          color: 'white',
+          color: '#f3e5ab',
           zIndex: 99999,
-          boxShadow: '0 10px 25px rgba(0,0,0,0.7)',
+          boxShadow: '0 12px 30px rgba(0,0,0,0.9)',
           display: 'flex',
           alignItems: 'center',
           gap: '12px',
@@ -334,24 +334,24 @@ const Soundboard = ({ onTriggerSound, onStopAllSounds, activeLoops = [], masterT
         }}>
           <span style={{ fontSize: '22px' }}>{masterToast.icon || '🔊'}</span>
           <div>
-            <div style={{ fontSize: '11px', color: '#34d399', fontWeight: 'bold', textTransform: 'uppercase' }}>
-              Sonando en Pantalla de Jugador
+            <div className="vtt-gothic-title" style={{ fontSize: '10px', color: '#c5a059', fontWeight: 'bold' }}>
+              Resonando en Sala de Jugadores
             </div>
-            <div style={{ fontSize: '14px', fontWeight: 'bold', color: '#f3f4f6' }}>
+            <div style={{ fontSize: '15px', fontWeight: 'bold', color: '#fffbeb' }}>
               {masterToast.label}
             </div>
           </div>
         </div>
       )}
 
-      {/* Panel Flotante de Efectos de Sonido (Abajo a la derecha, junto a Dados) */}
+      {/* Panel Flotante de Efectos de Sonido */}
       <div
         onPointerDown={(e) => e.stopPropagation()}
         onWheel={(e) => e.stopPropagation()}
         style={{
           position: 'fixed',
           bottom: '20px',
-          right: '175px',
+          right: '145px',
           zIndex: 5000,
           display: 'flex',
           flexDirection: 'column',
@@ -359,33 +359,34 @@ const Soundboard = ({ onTriggerSound, onStopAllSounds, activeLoops = [], masterT
         }}
       >
         {isOpen && (
-          <div style={{
-            width: '340px',
-            backgroundColor: '#1f2937',
-            border: '1px solid #374151',
-            borderRadius: '12px',
-            padding: '16px',
-            marginBottom: '10px',
-            boxShadow: '0 10px 30px rgba(0,0,0,0.8)',
-            color: 'white',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: '12px'
-          }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #374151', paddingBottom: '8px' }}>
-              <span style={{ fontWeight: 'bold', fontSize: '15px', color: '#f3f4f6' }}>🎵 Efectos de Sonido (Jugador)</span>
+          <div
+            className="vtt-wood-panel"
+            style={{
+              width: '350px',
+              border: '2px solid #8a6d3b',
+              borderRadius: '10px',
+              padding: '16px',
+              marginBottom: '10px',
+              color: '#e6d5b8',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '12px'
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #6b4c2b', paddingBottom: '8px' }}>
+              <span className="vtt-gothic-title" style={{ fontWeight: 'bold', fontSize: '14px', color: '#d4af37' }}>🎵 Órgano de Ecos (Jugador)</span>
               <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
                 {activeLoops.length > 0 && (
                   <button
                     onClick={onStopAllSounds}
-                    style={{ background: '#ef4444', border: 'none', color: 'white', borderRadius: '4px', padding: '3px 8px', fontSize: '11px', cursor: 'pointer', fontWeight: 'bold' }}
+                    style={{ background: '#991b1b', border: '1px solid #f87171', color: 'white', borderRadius: '4px', padding: '3px 8px', fontSize: '11px', cursor: 'pointer', fontWeight: 'bold' }}
                   >
-                    ⏹ Parar Todo
+                    ⏹ Silenciar
                   </button>
                 )}
                 <button
                   onClick={() => setIsOpen(false)}
-                  style={{ background: 'transparent', border: 'none', color: '#9ca3af', cursor: 'pointer', fontSize: '16px' }}
+                  style={{ background: 'transparent', border: 'none', color: '#c5a059', cursor: 'pointer', fontSize: '16px' }}
                 >
                   ✕
                 </button>
@@ -393,21 +394,22 @@ const Soundboard = ({ onTriggerSound, onStopAllSounds, activeLoops = [], masterT
             </div>
 
             {/* Pestañas de Categorías */}
-            <div style={{ display: 'flex', gap: '4px', backgroundColor: '#111827', padding: '4px', borderRadius: '8px' }}>
+            <div style={{ display: 'flex', gap: '4px', backgroundColor: '#120b07', padding: '4px', borderRadius: '6px', border: '1px solid #5c4028' }}>
               {categories.map(cat => (
                 <button
                   key={cat}
                   onClick={() => setActiveCategory(cat)}
+                  className="vtt-gothic-title"
                   style={{
                     flex: 1,
                     padding: '6px 4px',
-                    fontSize: '12px',
+                    fontSize: '11px',
                     fontWeight: 'bold',
-                    borderRadius: '6px',
+                    borderRadius: '4px',
                     border: 'none',
                     cursor: 'pointer',
-                    backgroundColor: activeCategory === cat ? '#3b82f6' : 'transparent',
-                    color: activeCategory === cat ? 'white' : '#9ca3af'
+                    background: activeCategory === cat ? 'linear-gradient(180deg, #b45309 0%, #78350f 100%)' : 'transparent',
+                    color: activeCategory === cat ? '#fffbeb' : '#c5a059'
                   }}
                 >
                   {cat}
@@ -428,53 +430,51 @@ const Soundboard = ({ onTriggerSound, onStopAllSounds, activeLoops = [], masterT
                       alignItems: 'center',
                       gap: '8px',
                       padding: '8px 10px',
-                      borderRadius: '8px',
-                      border: isLooping ? '1px solid #10b981' : '1px solid #374151',
-                      backgroundColor: isLooping ? 'rgba(16, 185, 129, 0.2)' : '#111827',
-                      color: 'white',
+                      borderRadius: '6px',
+                      border: isLooping ? '1px solid #fbbf24' : '1px solid #5c4028',
+                      backgroundColor: isLooping ? 'rgba(180, 83, 9, 0.35)' : '#120b07',
+                      color: '#f3e5ab',
                       cursor: 'pointer',
                       textAlign: 'left',
-                      fontSize: '12px',
+                      fontSize: '13px',
                       fontWeight: 'bold',
                       transition: 'all 0.15s'
                     }}
                   >
-                    <span style={{ fontSize: '18px' }}>{sound.icon}</span>
+                    <span style={{ fontSize: '17px' }}>{sound.icon}</span>
                     <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {sound.label}
                     </span>
-                    {isLooping && <span style={{ color: '#10b981', fontSize: '10px' }}>●</span>}
+                    {isLooping && <span style={{ color: '#fbbf24', fontSize: '10px' }}>●</span>}
                   </button>
                 );
               })}
             </div>
 
-            <div style={{ fontSize: '11px', color: '#9ca3af', textAlign: 'center', borderTop: '1px solid #374151', paddingTop: '6px' }}>
-              🔇 El audio está silenciado en tu ventana de Master para evitar eco.
+            <div style={{ fontSize: '12px', color: '#b89f7d', textAlign: 'center', borderTop: '1px solid #6b4c2b', paddingTop: '6px', fontStyle: 'italic' }}>
+              🔇 Silenciado en la mesa del Master para evitar eco.
             </div>
           </div>
         )}
 
         <button
           onClick={() => setIsOpen(!isOpen)}
+          className="vtt-brass-btn"
           style={{
-            padding: '10px 16px',
-            borderRadius: '999px',
-            backgroundColor: isOpen ? '#10b981' : '#1f2937',
-            color: isOpen ? '#111827' : 'white',
-            border: activeLoops.length > 0 ? '2px solid #10b981' : '1px solid #374151',
-            boxShadow: '0 4px 12px rgba(0,0,0,0.6)',
+            padding: '10px 18px',
+            borderRadius: '8px',
+            border: activeLoops.length > 0 ? '2px solid #fbbf24' : '2px solid #8a6d3b',
             cursor: 'pointer',
             fontWeight: 'bold',
-            fontSize: '14px',
+            fontSize: '13px',
             display: 'flex',
             alignItems: 'center',
             gap: '8px'
           }}
         >
-          🎵 {isOpen ? 'Cerrar Sonidos' : 'Sonidos'}
+          🎵 {isOpen ? 'Cerrar Ecos' : 'Ecos'}
           {activeLoops.length > 0 && (
-            <span style={{ backgroundColor: '#10b981', color: '#111827', borderRadius: '999px', padding: '1px 6px', fontSize: '11px', fontWeight: '900' }}>
+            <span style={{ backgroundColor: '#d4af37', color: '#120b07', borderRadius: '999px', padding: '1px 6px', fontSize: '11px', fontWeight: '900' }}>
               {activeLoops.length}
             </span>
           )}
