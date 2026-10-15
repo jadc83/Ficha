@@ -1,13 +1,11 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useMemo } from 'react';
 
 const CANVAS_SIZE = 4000;
 const CANVAS_OFFSET = 1000;
 
-// Intersección exacta entre un rayo (ox, oy) + t*(dx, dy) y un segmento (x1,y1)-(x2,y2)
 const raySegmentIntersection = (ox, oy, dx, dy, x1, y1, x2, y2) => {
   const s_dx = x2 - x1;
   const s_dy = y2 - y1;
-
   const denom = s_dx * dy - s_dy * dx;
   if (Math.abs(denom) < 1e-7) return null;
 
@@ -21,15 +19,12 @@ const raySegmentIntersection = (ox, oy, dx, dy, x1, y1, x2, y2) => {
   return t1 >= 0 ? t1 : null;
 };
 
-// Normaliza un ángulo al rango [-180, 180] respecto a una dirección central
-const angleDiff = (a, b) => {
-  return ((a - b + 180) % 360 + 360) % 360 - 180;
-};
+const angleDiff = (a, b) => ((a - b + 180) % 360 + 360) % 360 - 180;
 
-// Extrae todos los segmentos que bloquean la visión (muros y puertas cerradas; las ventanas dejan pasar la luz)
 export const getVisionBlockers = (maps = []) => {
   const segments = [];
-  for (const el of maps) {
+  for (let i = 0; i < maps.length; i++) {
+    const el = maps[i];
     if (el.type === 'wall') {
       segments.push({ x1: el.x1, y1: el.y1, x2: el.x2, y2: el.y2 });
     } else if (el.type === 'door' && !el.isOpen) {
@@ -40,15 +35,24 @@ export const getVisionBlockers = (maps = []) => {
       } else {
         segments.push({ x1: el.x + w / 2, y1: el.y, x2: el.x + w / 2, y2: el.y + h });
       }
+    } else if (el.type === 'object' && el.blocksVision && !el.isOpen) {
+      const w = el.width || 48;
+      const h = el.height || 48;
+      segments.push(
+        { x1: el.x, y1: el.y, x2: el.x + w, y2: el.y },
+        { x1: el.x + w, y1: el.y, x2: el.x + w, y2: el.y + h },
+        { x1: el.x + w, y1: el.y + h, x2: el.x, y2: el.y + h },
+        { x1: el.x, y1: el.y + h, x2: el.x, y2: el.y }
+      );
     }
   }
   return segments;
 };
 
-// Determina matemáticamente si un punto (tx, ty) es visto por al menos un token aliado
 export const isPointVisibleToPlayers = (tx, ty, viewerTokens = [], maps = [], visionRadius = 180) => {
   const blockers = getVisionBlockers(maps);
 
+  // 1. Comprobar si algún token aliado lo ve con su cono o halo
   for (let i = 0; i < viewerTokens.length; i++) {
     const viewer = viewerTokens[i];
     if (viewer.isHidden || viewer.faction === 'enemy') continue;
@@ -85,41 +89,61 @@ export const isPointVisibleToPlayers = (tx, ty, viewerTokens = [], maps = [], vi
         break;
       }
     }
+    if (!blocked) return true;
+  }
 
+  // 2. Comprobar si una Fuente de Luz estática activa (antorcha/brasero) ilumina al enemigo
+  for (let i = 0; i < maps.length; i++) {
+    const light = maps[i];
+    if (light.type !== 'light' || light.isOn === false) continue;
+
+    const lSize = light.width || 36;
+    const ox = light.x + lSize / 2;
+    const oy = light.y + lSize / 2;
+    const lRadius = light.radius || 220;
+    const dx = tx - ox;
+    const dy = ty - oy;
+    const dist = Math.hypot(dx, dy);
+
+    if (dist > lRadius) continue;
+    if (dist < 2) return true;
+
+    const rayDx = dx / dist;
+    const rayDy = dy / dist;
+    let blocked = false;
+
+    for (let j = 0; j < blockers.length; j++) {
+      const seg = blockers[j];
+      const hitT = raySegmentIntersection(ox, oy, rayDx, rayDy, seg.x1, seg.y1, seg.x2, seg.y2);
+      if (hitT !== null && hitT < dist - 2) {
+        blocked = true;
+        break;
+      }
+    }
     if (!blocked) return true;
   }
 
   return false;
 };
 
-// Calcula el polígono de visión combinando barrido angular fino + rayos exactos a los vértices de muros
 const computeVisibilityPolygon = (ox, oy, radius, angleDeg = 0, fovDeg = 90, blockers = []) => {
   const isFullCircle = fovDeg >= 360;
   const halfFov = fovDeg / 2;
   const angles = [];
+  const stepDeg = 3.0; // Optimizado para 60 FPS clavados
 
-  // 1. Barrido base suave cada 1.5 grados
-  const stepDeg = 1.5;
   if (isFullCircle) {
-    for (let a = 0; a < 360; a += stepDeg) {
-      angles.push((a * Math.PI) / 180);
-    }
+    for (let a = 0; a < 360; a += stepDeg) angles.push((a * Math.PI) / 180);
   } else {
     for (let offset = -halfFov; offset <= halfFov; offset += stepDeg) {
       angles.push(((angleDeg + offset) * Math.PI) / 180);
     }
-    angles.push(((angleDeg - halfFov) * Math.PI) / 180);
-    angles.push(((angleDeg + halfFov) * Math.PI) / 180);
   }
 
-  // 2. Rayos exactos a las esquinas de muros y puertas cercanas para sombras nítidas sin parpadeos
-  const rSq = radius * radius * 1.2;
+  const rSq = radius * radius * 1.15;
   for (let i = 0; i < blockers.length; i++) {
     const seg = blockers[i];
-    const pts = [
-      { x: seg.x1, y: seg.y1 },
-      { x: seg.x2, y: seg.y2 }
-    ];
+    const pts = [{ x: seg.x1, y: seg.y1 }, { x: seg.x2, y: seg.y2 }];
     for (let j = 0; j < 2; j++) {
       const vx = pts[j].x - ox;
       const vy = pts[j].y - oy;
@@ -127,13 +151,12 @@ const computeVisibilityPolygon = (ox, oy, radius, angleDeg = 0, fovDeg = 90, blo
         const deg = (Math.atan2(vy, vx) * 180) / Math.PI;
         if (isFullCircle || Math.abs(angleDiff(deg, angleDeg)) <= halfFov) {
           const rad = Math.atan2(vy, vx);
-          angles.push(rad - 0.0005, rad, rad + 0.0005);
+          angles.push(rad - 0.001, rad, rad + 0.001);
         }
       }
     }
   }
 
-  // Normalización estricta en [0, 360) para evitar que rayos en la frontera -180º/+180º deformen el cono
   const startAngleDeg = isFullCircle ? -180 : angleDeg - halfFov;
   angles.sort((ra, rb) => {
     const da = ((((ra * 180) / Math.PI - startAngleDeg) % 360) + 360) % 360;
@@ -146,14 +169,12 @@ const computeVisibilityPolygon = (ox, oy, radius, angleDeg = 0, fovDeg = 90, blo
     const rad = angles[i];
     const dx = Math.cos(rad);
     const dy = Math.sin(rad);
-
     let closestT = radius;
+
     for (let j = 0; j < blockers.length; j++) {
       const seg = blockers[j];
       const t = raySegmentIntersection(ox, oy, dx, dy, seg.x1, seg.y1, seg.x2, seg.y2);
-      if (t !== null && t < closestT) {
-        closestT = t;
-      }
+      if (t !== null && t < closestT) closestT = t;
     }
 
     points.push({
@@ -161,72 +182,58 @@ const computeVisibilityPolygon = (ox, oy, radius, angleDeg = 0, fovDeg = 90, blo
       y: oy + dy * closestT + CANVAS_OFFSET
     });
   }
-
   return points;
 };
 
-const tracePolygonPath = (ctx, cx, cy, points, isFullCircle) => {
-  ctx.beginPath();
-  if (!points || points.length === 0) return;
-
-  if (isFullCircle) {
-    ctx.moveTo(points[0].x, points[0].y);
-    for (let i = 1; i < points.length; i++) {
-      ctx.lineTo(points[i].x, points[i].y);
-    }
-  } else {
-    ctx.moveTo(cx, cy);
-    for (let i = 0; i < points.length; i++) {
-      ctx.lineTo(points[i].x, points[i].y);
-    }
-  }
-  ctx.closePath();
-};
-
-const drawTokenVisionMask = (
-  ctx,
-  ox,
-  oy,
-  radius,
-  angleDeg = 0,
-  fovDeg = 90,
-  tokenSize = 50,
-  blockers = [],
-  eraseAlpha = 1,
-  compositeOp = 'destination-out'
-) => {
+const drawVisionMask = (ctx, ox, oy, radius, angleDeg = 0, fovDeg = 90, sourceSize = 50, blockers = [], isMemoryStamp = false) => {
   if (!Number.isFinite(ox) || !Number.isFinite(oy) || !Number.isFinite(radius) || radius <= 0) return;
   const cx = ox + CANVAS_OFFSET;
   const cy = oy + CANVAS_OFFSET;
   const isFullCircle = fovDeg >= 360;
 
   ctx.save();
-  ctx.globalCompositeOperation = compositeOp;
+  // Si es para el mapa de memoria, pintamos blanco sólido (máscara limpia sin bandas acumuladas).
+  // Si es visión activa en tiempo real, recortamos la niebla con destination-out.
+  ctx.globalCompositeOperation = isMemoryStamp ? 'source-over' : 'destination-out';
 
-  // 1. Halo cercano de presencia (permite ver siempre la propia ficha del personaje aunque mire en cono)
-  const personalRadius = Math.max((tokenSize || 50) * 0.85, 36);
+  const personalRadius = Math.max((sourceSize || 50) * 0.85, 36);
   if (!isFullCircle) {
     const haloPoints = computeVisibilityPolygon(ox, oy, personalRadius, 0, 360, blockers);
-    tracePolygonPath(ctx, cx, cy, haloPoints, true);
-    const haloGrad = ctx.createRadialGradient(cx, cy, personalRadius * 0.25, cx, cy, personalRadius);
-    haloGrad.addColorStop(0, `rgba(0, 0, 0, ${eraseAlpha})`);
-    haloGrad.addColorStop(0.75, `rgba(0, 0, 0, ${eraseAlpha * 0.85})`);
-    haloGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
-    ctx.fillStyle = haloGrad;
-    ctx.fill();
+    if (haloPoints.length > 0) {
+      ctx.beginPath();
+      ctx.moveTo(haloPoints[0].x, haloPoints[0].y);
+      for (let i = 1; i < haloPoints.length; i++) ctx.lineTo(haloPoints[i].x, haloPoints[i].y);
+      ctx.closePath();
+      ctx.fillStyle = isMemoryStamp ? '#ffffff' : 'rgba(0,0,0,1)';
+      ctx.fill();
+    }
   }
 
-  // 2. Cono principal o círculo completo de visión con caída suave tipo antorcha
   const polyPoints = computeVisibilityPolygon(ox, oy, radius, angleDeg, fovDeg, blockers);
-  tracePolygonPath(ctx, cx, cy, polyPoints, isFullCircle);
+  if (polyPoints.length > 0) {
+    ctx.beginPath();
+    if (isFullCircle) {
+      ctx.moveTo(polyPoints[0].x, polyPoints[0].y);
+      for (let i = 1; i < polyPoints.length; i++) ctx.lineTo(polyPoints[i].x, polyPoints[i].y);
+    } else {
+      ctx.moveTo(cx, cy);
+      for (let i = 0; i < polyPoints.length; i++) ctx.lineTo(polyPoints[i].x, polyPoints[i].y);
+    }
+    ctx.closePath();
 
-  const grad = ctx.createRadialGradient(cx, cy, radius * 0.1, cx, cy, radius);
-  grad.addColorStop(0, `rgba(0, 0, 0, ${eraseAlpha})`);
-  grad.addColorStop(0.76, `rgba(0, 0, 0, ${eraseAlpha * 0.94})`);
-  grad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+    if (isMemoryStamp) {
+      // Borde limpio en la máscara de memoria para que no deje estelas ni anillos al caminar
+      ctx.fillStyle = '#ffffff';
+      ctx.fill();
+    } else {
+      const grad = ctx.createRadialGradient(cx, cy, radius * 0.72, cx, cy, radius);
+      grad.addColorStop(0, 'rgba(0,0,0,1)');
+      grad.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = grad;
+      ctx.fill();
+    }
+  }
 
-  ctx.fillStyle = grad;
-  ctx.fill();
   ctx.restore();
 };
 
@@ -240,142 +247,127 @@ const FogLayer = ({
   fowMemoryEnabled = true,
   isPlayerView = false
 }) => {
-  const cacheCanvasRef = useRef(null);
-  const memoryCanvasRef = useRef(null);
-  const processedCountRef = useRef(0);
-  const lastBlockersKeyRef = useRef('');
+  const exploredMaskCanvasRef = useRef(null);
+  const lastActionsCountRef = useRef(0);
+
+  // Caching de segmentos de muros, puertas y objetos bloqueantes para evitar recálculos por frame
+  const cachedBlockers = useMemo(() => getVisionBlockers(maps), [maps]);
+  const activeLightSources = useMemo(
+    () => maps.filter(el => el.type === 'light' && el.isOn !== false),
+    [maps]
+  );
 
   useEffect(() => {
-    const canvas = fowCanvasRef.current;
-    if (!canvas || !fowEnabled) return;
+    if (!fowEnabled || !fowCanvasRef?.current) return;
 
-    if (!cacheCanvasRef.current) {
-      const offscreen = document.createElement('canvas');
-      offscreen.width = CANVAS_SIZE;
-      offscreen.height = CANVAS_SIZE;
-      cacheCanvasRef.current = offscreen;
+    // Lienzo de máscara de zonas exploradas (transparente = no visto, blanco = ya explorado)
+    if (!exploredMaskCanvasRef.current) {
+      const off = document.createElement('canvas');
+      off.width = CANVAS_SIZE;
+      off.height = CANVAS_SIZE;
+      exploredMaskCanvasRef.current = off;
     }
 
-    if (!memoryCanvasRef.current) {
-      const memOffscreen = document.createElement('canvas');
-      memOffscreen.width = CANVAS_SIZE;
-      memOffscreen.height = CANVAS_SIZE;
-      memoryCanvasRef.current = memOffscreen;
+    const maskCanvas = exploredMaskCanvasRef.current;
+    const maskCtx = maskCanvas.getContext('2d');
+
+    if (fowActions.length === 0 && lastActionsCountRef.current > 0) {
+      maskCtx.clearRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
     }
+    lastActionsCountRef.current = fowActions.length;
 
-    const cacheCanvas = cacheCanvasRef.current;
-    const cacheCtx = cacheCanvas.getContext('2d');
-    const memoryCanvas = memoryCanvasRef.current;
-    const memoryCtx = memoryCanvas.getContext('2d');
-    const blockers = getVisionBlockers(maps);
-    const blockersKey = JSON.stringify(blockers);
+    let rafId = requestAnimationFrame(() => {
+      // 1. Si hay memoria de exploración, registramos las zonas visitadas en una máscara limpia (sin acumular opacidad)
+      if (fowMemoryEnabled) {
+        tokens.forEach(token => {
+          if (token.isHidden || token.faction === 'enemy') return;
+          const size = token.size || 50;
+          const ox = token.x + size / 2;
+          const oy = token.y + size / 2;
+          const fov = token.visionMode === 'circle' ? 360 : 90;
+          drawVisionMask(maskCtx, ox, oy, fowVisionRadius, token.rotation || 0, fov, size, cachedBlockers, true);
+        });
 
-    // Si se limpió el historial o cambiaron muros/puertas, reconstruimos la base de niebla en caché
-    if (
-      fowActions.length < processedCountRef.current ||
-      fowActions.length === 0 ||
-      blockersKey !== lastBlockersKeyRef.current
-    ) {
-      cacheCtx.globalCompositeOperation = 'source-over';
-      cacheCtx.clearRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
-      cacheCtx.fillStyle = 'rgba(7, 5, 4, 1)';
-      cacheCtx.fillRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
-
-      memoryCtx.globalCompositeOperation = 'source-over';
-      memoryCtx.clearRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
-
-      processedCountRef.current = 0;
-      lastBlockersKeyRef.current = blockersKey;
-    }
-
-    for (let i = processedCountRef.current; i < fowActions.length; i++) {
-      const action = fowActions[i];
-      if (!action || !Number.isFinite(action.x) || !Number.isFinite(action.y)) continue;
-
-      if (action.type === 'reveal') {
-        if (action.mode === 'token') {
-          if (fowMemoryEnabled) {
-            const fov = action.visionMode === 'circle' ? 360 : (action.fov || 90);
-            drawTokenVisionMask(
-              memoryCtx,
-              action.x,
-              action.y,
-              action.radius || fowVisionRadius,
-              action.angle || 0,
-              fov,
-              action.tokenSize || 50,
-              blockers,
-              1.0,
-              'source-over'
-            );
-          }
-        } else {
-          const r = Math.max(5, action.radius || 50);
-          const cx = action.x + CANVAS_OFFSET;
-          const cy = action.y + CANVAS_OFFSET;
-          cacheCtx.save();
-          cacheCtx.beginPath();
-          cacheCtx.arc(cx, cy, r, 0, Math.PI * 2);
-          const grad = cacheCtx.createRadialGradient(cx, cy, r * 0.25, cx, cy, r);
-          grad.addColorStop(0, 'rgba(0, 0, 0, 1)');
-          grad.addColorStop(0.82, 'rgba(0, 0, 0, 0.95)');
-          grad.addColorStop(1, 'rgba(0, 0, 0, 0)');
-          cacheCtx.globalCompositeOperation = 'destination-out';
-          cacheCtx.fillStyle = grad;
-          cacheCtx.fill();
-          cacheCtx.restore();
-        }
-      } else if (action.type === 'hide') {
-        const r = Math.max(5, action.radius || 50);
-        const cx = action.x + CANVAS_OFFSET;
-        const cy = action.y + CANVAS_OFFSET;
-        cacheCtx.save();
-        cacheCtx.beginPath();
-        cacheCtx.arc(cx, cy, r, 0, Math.PI * 2);
-        cacheCtx.globalCompositeOperation = 'source-over';
-        cacheCtx.fillStyle = 'rgba(7, 5, 4, 1)';
-        cacheCtx.fill();
-        cacheCtx.restore();
-
-        memoryCtx.save();
-        memoryCtx.beginPath();
-        memoryCtx.arc(cx, cy, r, 0, Math.PI * 2);
-        memoryCtx.globalCompositeOperation = 'destination-out';
-        memoryCtx.fillStyle = 'rgba(0, 0, 0, 1)';
-        memoryCtx.fill();
-        memoryCtx.restore();
+        activeLightSources.forEach(light => {
+          const lSize = light.width || 36;
+          const ox = light.x + lSize / 2;
+          const oy = light.y + lSize / 2;
+          drawVisionMask(maskCtx, ox, oy, light.radius || 220, 0, 360, lSize, cachedBlockers, true);
+        });
       }
-    }
-    processedCountRef.current = fowActions.length;
 
-    const ctx = canvas.getContext('2d');
-    ctx.globalCompositeOperation = 'source-over';
-    ctx.clearRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
-    ctx.drawImage(cacheCanvas, 0, 0);
+      // 2. Componer el lienzo principal con oscuridad total de base
+      const mainCanvas = fowCanvasRef.current;
+      if (!mainCanvas) return;
+      const ctx = mainCanvas.getContext('2d');
 
-    if (fowMemoryEnabled) {
-      ctx.save();
-      ctx.globalCompositeOperation = 'destination-out';
-      ctx.globalAlpha = 0.48;
-      ctx.drawImage(memoryCanvas, 0, 0);
-      ctx.restore();
-    }
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.clearRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
+      ctx.fillStyle = '#050302';
+      ctx.fillRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
 
-    tokens.forEach(token => {
-      if (token.isHidden || token.faction === 'enemy') return;
-      const size = token.size || 50;
-      const cx = token.x + size / 2;
-      const cy = token.y + size / 2;
-      const fov = token.visionMode === 'circle' ? 360 : 90;
-      drawTokenVisionMask(ctx, cx, cy, fowVisionRadius, token.rotation || 0, fov, size, blockers, 1.0, 'destination-out');
+      // Si la memoria está activa, rebajamos de forma 100% uniforme la opacidad en toda la zona explorada (penumbra limpia)
+      if (fowMemoryEnabled) {
+        ctx.save();
+        ctx.globalCompositeOperation = 'destination-out';
+        ctx.globalAlpha = 0.42; // Deja un 58% de penumbra constante y uniforme sin rayas ni solapamientos
+        ctx.drawImage(maskCanvas, 0, 0);
+        ctx.restore();
+      }
+
+      // 3. Aplicar trazos manuales del Master
+      for (let i = 0; i < fowActions.length; i++) {
+        const act = fowActions[i];
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(act.x + CANVAS_OFFSET, act.y + CANVAS_OFFSET, act.size || 80, 0, Math.PI * 2);
+        if (act.mode === 'reveal') {
+          ctx.globalCompositeOperation = 'destination-out';
+          ctx.fillStyle = 'rgba(0,0,0,1)';
+        } else {
+          ctx.globalCompositeOperation = 'source-over';
+          ctx.fillStyle = '#050302';
+        }
+        ctx.fill();
+        ctx.restore();
+      }
+
+      // 4. Recortar a 100% de claridad los conos de visión actuales de héroes aliados
+      tokens.forEach(token => {
+        if (token.isHidden || token.faction === 'enemy') return;
+        const size = token.size || 50;
+        const ox = token.x + size / 2;
+        const oy = token.y + size / 2;
+        const fov = token.visionMode === 'circle' ? 360 : 90;
+        drawVisionMask(ctx, ox, oy, fowVisionRadius, token.rotation || 0, fov, size, cachedBlockers, false);
+      });
+
+      // 5. Recortar a 100% de claridad las Fuentes de Luz estáticas (antorchas, braseros, faroles)
+      activeLightSources.forEach(light => {
+        const lSize = light.width || 36;
+        const ox = light.x + lSize / 2;
+        const oy = light.y + lSize / 2;
+        const lRadius = light.radius || 220;
+        drawVisionMask(ctx, ox, oy, lRadius, 0, 360, lSize, cachedBlockers, false);
+
+        // Tinte cálido o espectral sobre la zona iluminada por la antorcha
+        ctx.save();
+        ctx.globalCompositeOperation = 'source-over';
+        const cx = ox + CANVAS_OFFSET;
+        const cy = oy + CANVAS_OFFSET;
+        const glow = ctx.createRadialGradient(cx, cy, 4, cx, cy, lRadius * 0.85);
+        glow.addColorStop(0, light.color || 'rgba(251, 146, 60, 0.22)');
+        glow.addColorStop(1, 'rgba(0, 0, 0, 0)');
+        ctx.fillStyle = glow;
+        ctx.beginPath();
+        ctx.arc(cx, cy, lRadius * 0.85, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      });
     });
 
-    ctx.globalCompositeOperation = 'source-over';
-  }, [fowActions, fowEnabled, fowCanvasRef, maps, tokens, fowVisionRadius, fowMemoryEnabled]);
-
-  useEffect(() => {
-    processedCountRef.current = 0;
-  }, [fowMemoryEnabled]);
+    return () => cancelAnimationFrame(rafId);
+  }, [fowEnabled, fowActions, cachedBlockers, activeLightSources, tokens, fowVisionRadius, fowMemoryEnabled, fowCanvasRef]);
 
   if (!fowEnabled) return null;
 
@@ -389,8 +381,9 @@ const FogLayer = ({
         top: -CANVAS_OFFSET,
         left: -CANVAS_OFFSET,
         pointerEvents: 'none',
-        zIndex: 5,
-        opacity: isPlayerView ? 1 : 0.78
+        zIndex: 8,
+        opacity: isPlayerView ? 1 : 0.68,
+        transition: 'opacity 0.25s ease'
       }}
     />
   );

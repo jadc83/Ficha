@@ -31,11 +31,14 @@ export const SOUND_CATALOG = [
   { id: 'sfx_ghost', label: 'Lamento Espectral', icon: '👻', category: 'Criaturas' }
 ];
 
-// Motor de Síntesis Web Audio API (Solo se ejecuta en la Vista de Jugador)
+const MAX_AUDIO_SIZE_BYTES = 1.5 * 1024 * 1024; // 1.5 MB máximo para mantener ligereza
+
+// Motor de Síntesis Web Audio API + Reproductor de Audio Personalizado (.ogg / .mp3)
 class SoundEngine {
   constructor() {
     this.ctx = null;
     this.activeLoops = {};
+    this.activeAudioTags = {};
   }
 
   init() {
@@ -66,17 +69,49 @@ class SoundEngine {
       } catch (e) {}
       delete this.activeLoops[id];
     }
+    if (this.activeAudioTags[id]) {
+      try {
+        this.activeAudioTags[id].pause();
+        this.activeAudioTags[id].currentTime = 0;
+      } catch (e) {}
+      delete this.activeAudioTags[id];
+    }
   }
 
   stopAll() {
     Object.keys(this.activeLoops).forEach(id => this.stopLoop(id));
+    Object.keys(this.activeAudioTags).forEach(id => this.stopLoop(id));
   }
 
-  play(id) {
+  play(soundOrId, customAudioSrc = null, isLoop = false) {
+    const id = typeof soundOrId === 'object' ? soundOrId.id : soundOrId;
+    const audioDataUrl = typeof soundOrId === 'object' ? soundOrId.audioDataUrl : customAudioSrc;
+    const loopFlag = typeof soundOrId === 'object' ? Boolean(soundOrId.loop) : Boolean(isLoop);
+
+    // Si es un sonido personalizado (.mp3 / .ogg en Base64)
+    if (audioDataUrl) {
+      if (loopFlag && this.activeAudioTags[id]) {
+        this.stopLoop(id);
+        return false;
+      }
+      try {
+        const audio = new Audio(audioDataUrl);
+        audio.loop = loopFlag;
+        audio.volume = 0.85;
+        audio.play().catch(() => {});
+        if (loopFlag) {
+          this.activeAudioTags[id] = audio;
+        }
+      } catch (e) {
+        console.error('Error reproduciendo audio personalizado:', e);
+      }
+      return true;
+    }
+
     this.init();
     const now = this.ctx.currentTime;
 
-    // Si es un ambiente en bucle y ya está sonando, lo detenemos (toggle)
+    // Si es un ambiente sintético en bucle y ya está sonando, lo detenemos (toggle)
     if (id.startsWith('amb_')) {
       if (this.activeLoops[id]) {
         this.stopLoop(id);
@@ -306,10 +341,57 @@ class SoundEngine {
 
 export const playerSoundEngine = new SoundEngine();
 
-const Soundboard = ({ onTriggerSound, onStopAllSounds, activeLoops = [], masterToast }) => {
+const Soundboard = ({
+  onTriggerSound,
+  onStopAllSounds,
+  activeLoops = [],
+  masterToast,
+  customSounds = [],
+  onAddCustomSound,
+  onRemoveCustomSound
+}) => {
   const [isOpen, setIsOpen] = useState(false);
   const [activeCategory, setActiveCategory] = useState('Ambiente');
-  const categories = ['Ambiente', 'Entorno', 'Combate', 'Criaturas'];
+  const [newSoundLabel, setNewSoundLabel] = useState('');
+  const [newSoundIcon, setNewSoundIcon] = useState('🎵');
+  const [newSoundLoop, setNewSoundLoop] = useState(false);
+  const [uploadError, setUploadError] = useState(null);
+  const fileInputRef = useRef(null);
+
+  const categories = ['Ambiente', 'Entorno', 'Combate', 'Criaturas', 'Propios'];
+
+  const handleAudioFileUpload = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    setUploadError(null);
+
+    if (file.size > MAX_AUDIO_SIZE_BYTES) {
+      setUploadError('⚠️ El archivo supera 1.5 MB. Usa un .ogg o .mp3 corto y ligero.');
+      e.target.value = '';
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      const cleanName = newSoundLabel.trim() || file.name.replace(/\.[^/.]+$/, '').slice(0, 18);
+      const customObj = {
+        id: `custom_snd_${Date.now()}`,
+        label: cleanName,
+        icon: newSoundIcon.trim() || '🎵',
+        category: 'Propios',
+        loop: newSoundLoop,
+        audioDataUrl: evt.target.result
+      };
+      if (onAddCustomSound) onAddCustomSound(customObj);
+      setNewSoundLabel('');
+    };
+    reader.readAsDataURL(file);
+    e.target.value = '';
+  };
+
+  const displayedSounds = activeCategory === 'Propios'
+    ? customSounds
+    : SOUND_CATALOG.filter(s => s.category === activeCategory);
 
   return (
     <>
@@ -398,12 +480,12 @@ const Soundboard = ({ onTriggerSound, onStopAllSounds, activeLoops = [], masterT
               {categories.map(cat => (
                 <button
                   key={cat}
-                  onClick={() => setActiveCategory(cat)}
+                  onClick={() => { setActiveCategory(cat); setUploadError(null); }}
                   className="vtt-gothic-title"
                   style={{
                     flex: 1,
-                    padding: '6px 4px',
-                    fontSize: '11px',
+                    padding: '6px 3px',
+                    fontSize: '10px',
                     fontWeight: 'bold',
                     borderRadius: '4px',
                     border: 'none',
@@ -417,38 +499,127 @@ const Soundboard = ({ onTriggerSound, onStopAllSounds, activeLoops = [], masterT
               ))}
             </div>
 
+            {/* Formulario para subir audio ligero (.ogg / .mp3) en la pestaña Propios */}
+            {activeCategory === 'Propios' && (
+              <div style={{ backgroundColor: '#120b07', border: '1px solid #6b4c2b', borderRadius: '6px', padding: '10px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                <div style={{ display: 'flex', gap: '6px' }}>
+                  <input
+                    type="text"
+                    value={newSoundIcon}
+                    onChange={(e) => setNewSoundIcon(e.target.value)}
+                    placeholder="🎵"
+                    style={{ width: '42px', padding: '6px', textAlign: 'center', backgroundColor: '#1c120c', color: '#f3e5ab', border: '1px solid #8a6d3b', borderRadius: '4px' }}
+                    title="Icono del sonido"
+                  />
+                  <input
+                    type="text"
+                    value={newSoundLabel}
+                    onChange={(e) => setNewSoundLabel(e.target.value)}
+                    placeholder="Nombre (opcional)..."
+                    style={{ flex: 1, padding: '6px 8px', backgroundColor: '#1c120c', color: '#f3e5ab', border: '1px solid #8a6d3b', borderRadius: '4px', fontSize: '12px' }}
+                  />
+                </div>
+
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11px', color: '#c5a059', cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={newSoundLoop}
+                      onChange={(e) => setNewSoundLoop(e.target.checked)}
+                    />
+                    🔁 En bucle (Ambiente)
+                  </label>
+
+                  <input
+                    type="file"
+                    accept=".ogg,.mp3,.wav,audio/ogg,audio/mpeg,audio/wav"
+                    ref={fileInputRef}
+                    onChange={handleAudioFileUpload}
+                    style={{ display: 'none' }}
+                  />
+                  <button
+                    onClick={() => fileInputRef.current.click()}
+                    className="vtt-brass-btn"
+                    style={{ padding: '5px 10px', borderRadius: '4px', cursor: 'pointer', fontSize: '11px', fontWeight: 'bold' }}
+                  >
+                    📂 Subir .ogg / .mp3 (≤1.5MB)
+                  </button>
+                </div>
+
+                {uploadError && (
+                  <div style={{ fontSize: '11px', color: '#f87171', textAlign: 'center' }}>
+                    {uploadError}
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Botonera de Sonidos */}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', maxHeight: '230px', overflowY: 'auto' }}>
-              {SOUND_CATALOG.filter(s => s.category === activeCategory).map(sound => {
+              {displayedSounds.map(sound => {
                 const isLooping = activeLoops.includes(sound.id);
                 return (
-                  <button
+                  <div
                     key={sound.id}
-                    onClick={() => onTriggerSound(sound)}
                     style={{
                       display: 'flex',
                       alignItems: 'center',
-                      gap: '8px',
-                      padding: '8px 10px',
                       borderRadius: '6px',
                       border: isLooping ? '1px solid #fbbf24' : '1px solid #5c4028',
                       backgroundColor: isLooping ? 'rgba(180, 83, 9, 0.35)' : '#120b07',
-                      color: '#f3e5ab',
-                      cursor: 'pointer',
-                      textAlign: 'left',
-                      fontSize: '13px',
-                      fontWeight: 'bold',
-                      transition: 'all 0.15s'
+                      overflow: 'hidden'
                     }}
                   >
-                    <span style={{ fontSize: '17px' }}>{sound.icon}</span>
-                    <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {sound.label}
-                    </span>
-                    {isLooping && <span style={{ color: '#fbbf24', fontSize: '10px' }}>●</span>}
-                  </button>
+                    <button
+                      onClick={() => onTriggerSound(sound)}
+                      style={{
+                        flex: 1,
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '8px',
+                        padding: '8px 10px',
+                        background: 'transparent',
+                        border: 'none',
+                        color: '#f3e5ab',
+                        cursor: 'pointer',
+                        textAlign: 'left',
+                        fontSize: '13px',
+                        fontWeight: 'bold',
+                        overflow: 'hidden'
+                      }}
+                    >
+                      <span style={{ fontSize: '17px' }}>{sound.icon}</span>
+                      <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {sound.label}
+                      </span>
+                      {isLooping && <span style={{ color: '#fbbf24', fontSize: '10px' }}>●</span>}
+                    </button>
+
+                    {activeCategory === 'Propios' && onRemoveCustomSound && (
+                      <button
+                        onClick={() => onRemoveCustomSound(sound.id)}
+                        style={{
+                          background: 'transparent',
+                          border: 'none',
+                          borderLeft: '1px solid #3a2618',
+                          color: '#ef4444',
+                          cursor: 'pointer',
+                          padding: '8px 7px',
+                          fontSize: '12px'
+                        }}
+                        title="Eliminar sonido personalizado"
+                      >
+                        ✕
+                      </button>
+                    )}
+                  </div>
                 );
               })}
+              {activeCategory === 'Propios' && customSounds.length === 0 && (
+                <div style={{ gridColumn: '1 / -1', textAlign: 'center', fontSize: '12px', color: '#8a6d3b', padding: '12px', fontStyle: 'italic' }}>
+                  Sube archivos .ogg o .mp3 cortos para usarlos en la mesa o en el menú radial del mapa.
+                </div>
+              )}
             </div>
 
             <div style={{ fontSize: '12px', color: '#b89f7d', textAlign: 'center', borderTop: '1px solid #6b4c2b', paddingTop: '6px', fontStyle: 'italic' }}>

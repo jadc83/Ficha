@@ -21,6 +21,7 @@ const GameToken = ({
   onPointerDown,
   onStartRotate,
   onToggleLock,
+  onToggleName,
   onToggleHidden,
   onToggleFaction,
   onUpdateSize,
@@ -31,6 +32,7 @@ const GameToken = ({
 }) => {
   const [menuState, setMenuState] = useState({ visible: false, x: 0, y: 0 });
   const [isHovered, setIsHovered] = useState(false);
+  const [isRotatingLocally, setIsRotatingLocally] = useState(false);
   const menuRef = useRef(null);
   const tokenRef = useRef(null);
   const currentSize = token.size || 50;
@@ -291,7 +293,7 @@ const GameToken = ({
           }}
         >
           <div className="vtt-gothic-title" style={{ fontSize: '13px', color: '#d4af37', textAlign: 'center', borderBottom: '1px solid #6b4c2b', paddingBottom: '6px' }}>
-            ⚜️ {token.name}
+            {token.name}
           </div>
 
           <div style={{ display: 'flex', gap: '6px' }}>
@@ -315,7 +317,7 @@ const GameToken = ({
               }}
               title="Oculta o revela esta ficha en la pantalla de los jugadores"
             >
-              {isHidden ? '👻 Oculto' : '👁️ Visible'}
+              {isHidden ? 'Oculto' : 'Visible'}
             </button>
 
             <button
@@ -338,25 +340,53 @@ const GameToken = ({
               }}
               title="Los Aliados iluminan la niebla; los Enemigos solo se ven cuando entran en el cono de visión de un Aliado"
             >
-              {faction === 'enemy' ? '💀 Enemigo' : '🛡️ Aliado'}
+              {faction === 'enemy' ? 'Enemigo' : 'Aliado'}
             </button>
           </div>
 
-          <button
-            onPointerDown={(e) => {
-              e.stopPropagation();
-              e.preventDefault();
-              if (onToggleLock) onToggleLock(token.id);
-              setMenuState({ visible: false, x: 0, y: 0 });
-            }}
-            className="vtt-brass-btn"
-            style={{
-              cursor: 'pointer', padding: '6px 12px', whiteSpace: 'nowrap',
-              borderRadius: '4px', fontWeight: 'bold', fontSize: '12px'
-            }}
-          >
-            {token.isLocked ? '🔓 Desbloquear Ficha' : '🔒 Bloquear Posición'}
-          </button>
+          <div style={{ display: 'flex', gap: '6px' }}>
+            <button
+              onPointerDown={(e) => {
+                e.stopPropagation();
+                e.preventDefault();
+                if (onToggleName) onToggleName(token.id);
+              }}
+              className="vtt-brass-btn"
+              style={{
+                flex: 1,
+                cursor: 'pointer',
+                padding: '6px 8px',
+                borderRadius: '4px',
+                fontWeight: 'bold',
+                fontSize: '11px',
+                borderColor: token.showName !== false ? '#fbbf24' : '#8a6d3b',
+                color: token.showName !== false ? '#fbbf24' : '#b89f7d'
+              }}
+              title="Muestra u oculta la etiqueta con el nombre sobre la ficha en el tablero"
+            >
+              {token.showName !== false ? 'Ocultar Nombre' : 'Mostrar Nombre'}
+            </button>
+
+            <button
+              onPointerDown={(e) => {
+                e.stopPropagation();
+                e.preventDefault();
+                if (onToggleLock) onToggleLock(token.id);
+                setMenuState({ visible: false, x: 0, y: 0 });
+              }}
+              className="vtt-brass-btn"
+              style={{
+                flex: 1,
+                cursor: 'pointer',
+                padding: '6px 8px',
+                borderRadius: '4px',
+                fontWeight: 'bold',
+                fontSize: '11px'
+              }}
+            >
+              {token.isLocked ? 'Desbloquear' : 'Bloquear'}
+            </button>
+          </div>
 
           {/* Selector de Tipo de Visión (Cono Direccional vs 360º) */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', borderTop: '1px solid #4a331d', paddingTop: '8px' }}>
@@ -376,7 +406,7 @@ const GameToken = ({
                   color: '#f3e5ab'
                 }}
               >
-                🔦 Cono 90º
+                Cono 90º
               </button>
               <button
                 onPointerDown={(e) => {
@@ -390,7 +420,7 @@ const GameToken = ({
                   color: '#f3e5ab'
                 }}
               >
-                🕯️ Antorcha 360º
+                Visión 360º
               </button>
             </div>
           </div>

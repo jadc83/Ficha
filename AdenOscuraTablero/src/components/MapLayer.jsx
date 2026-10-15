@@ -1,7 +1,17 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 
-const MapLayer = ({ maps, fowCanvasRef, fowEnabled = false, isPlayerView = false, onToggleDoor, onToggleWindow }) => {
+const MapLayer = ({
+  maps,
+  fowCanvasRef,
+  fowEnabled = false,
+  isPlayerView = false,
+  onToggleDoor,
+  onToggleWindow,
+  onToggleObject,
+  onToggleLight,
+  onProjectHandout
+}) => {
   const [readingNote, setReadingNote] = useState(null);
   const [visibleElements, setVisibleElements] = useState({});
   const [contextMenu, setContextMenu] = useState({ visible: false, x: 0, y: 0, item: null });
@@ -19,7 +29,7 @@ const MapLayer = ({ maps, fowCanvasRef, fowEnabled = false, isPlayerView = false
     return () => document.removeEventListener('pointerdown', handleClickOutside, true);
   }, [contextMenu.visible]);
 
-  // RADAR DE NIEBLA: Oculta notas, puertas y ventanas en la Vista de Jugador mientras estén bajo oscuridad cerrada
+  // RADAR DE NIEBLA: Oculta notas, puertas, ventanas y objetos en la Vista de Jugador mientras estén bajo oscuridad cerrada
   useEffect(() => {
     if (!fowEnabled || !isPlayerView) return;
 
@@ -32,11 +42,10 @@ const MapLayer = ({ maps, fowCanvasRef, fowEnabled = false, isPlayerView = false
         const newVis = { ...visibleElements };
 
         maps.forEach(element => {
-          if (element.type === 'note' || element.type === 'door' || element.type === 'window') {
+          if (element.type === 'note' || element.type === 'door' || element.type === 'window' || element.type === 'object' || element.type === 'light') {
             const centerX = Math.round(element.x + ((element.width || 40) / 2) + 1000);
             const centerY = Math.round(element.y + ((element.height || 40) / 2) + 1000);
             const pixel = ctx.getImageData(centerX, centerY, 1, 1).data;
-            // Visible si la niebla en ese punto ha sido despejada o está en penumbra explorada (alpha < 225)
             const isVisible = pixel[3] < 225;
 
             if (newVis[element.id] !== isVisible) {
@@ -90,7 +99,7 @@ const MapLayer = ({ maps, fowCanvasRef, fowEnabled = false, isPlayerView = false
               style={{
                 position: 'absolute', left: `${element.x}px`, top: `${element.y}px`,
                 width: '40px', height: '40px',
-                background: ' radial-gradient(circle, #f3e5ab 0%, #c5a059 100%)',
+                background: 'radial-gradient(circle, #f3e5ab 0%, #c5a059 100%)',
                 borderRadius: '6px', display: 'flex', alignItems: 'center', justifyContent: 'center',
                 cursor: 'pointer', border: '2px solid #5c3a21', boxShadow: '0 4px 10px rgba(0,0,0,0.8)',
                 fontSize: '22px', zIndex: 6
@@ -98,6 +107,94 @@ const MapLayer = ({ maps, fowCanvasRef, fowEnabled = false, isPlayerView = false
               title="Leer Pergamino"
             >
               📜
+            </div>
+          );
+        }
+
+        if (element.type === 'object') {
+          if (isPlayerView && (element.isHidden || (fowEnabled && !visibleElements[element.id]))) {
+            return null;
+          }
+
+          return (
+            <div
+              key={element.id}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                if (isPlayerView) return;
+                setContextMenu({ visible: true, x: e.clientX, y: e.clientY, item: element });
+              }}
+              onPointerDown={(e) => {
+                if (e.button === 2 && !isPlayerView) e.stopPropagation();
+              }}
+              style={{
+                position: 'absolute',
+                left: `${element.x}px`,
+                top: `${element.y}px`,
+                width: `${element.width || 48}px`,
+                height: `${element.height || 48}px`,
+                background: element.isOpen
+                  ? 'radial-gradient(circle, rgba(20, 83, 45, 0.75) 0%, rgba(5, 46, 22, 0.85) 100%)'
+                  : 'radial-gradient(circle, #3a2618 0%, #170f0a 100%)',
+                border: element.isOpen ? '2px solid #4ade80' : '2px solid #d4af37',
+                borderRadius: '8px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                cursor: isPlayerView ? 'default' : 'context-menu',
+                boxShadow: '0 6px 14px rgba(0,0,0,0.85)',
+                zIndex: 6,
+                fontSize: '22px',
+                transition: 'all 0.2s'
+              }}
+              title={`${element.name || 'Objeto'} (${element.isOpen ? 'Abierto/Activado' : 'Cerrado'} - Clic derecho para interactuar)`}
+            >
+              {element.isOpen ? (element.openIcon || '🪙') : (element.icon || '📦')}
+            </div>
+          );
+        }
+
+        if (element.type === 'light') {
+          if (isPlayerView && !element.isOn && fowEnabled && !visibleElements[element.id]) {
+            return null;
+          }
+
+          return (
+            <div
+              key={element.id}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                if (isPlayerView) return;
+                setContextMenu({ visible: true, x: e.clientX, y: e.clientY, item: element });
+              }}
+              onPointerDown={(e) => {
+                if (e.button === 2 && !isPlayerView) e.stopPropagation();
+              }}
+              style={{
+                position: 'absolute',
+                left: `${element.x}px`,
+                top: `${element.y}px`,
+                width: `${element.width || 36}px`,
+                height: `${element.height || 36}px`,
+                borderRadius: '50%',
+                background: element.isOn !== false
+                  ? 'radial-gradient(circle, #b45309 0%, #261810 100%)'
+                  : '#140c08',
+                border: element.isOn !== false ? '2px solid #fbbf24' : '2px dashed #6b4c2b',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                cursor: isPlayerView ? 'default' : 'context-menu',
+                boxShadow: element.isOn !== false ? '0 0 20px rgba(251, 191, 36, 0.9)' : 'none',
+                opacity: element.isOn !== false ? 1 : 0.55,
+                zIndex: 7,
+                fontSize: '18px'
+              }}
+              title={`${element.name || 'Fuente de Luz'} (${element.isOn !== false ? 'Encendida' : 'Apagada'} - Clic derecho para encender/apagar)`}
+            >
+              {element.isOn !== false ? (element.icon || '🔥') : '🌑'}
             </div>
           );
         }
@@ -209,7 +306,6 @@ const MapLayer = ({ maps, fowCanvasRef, fowEnabled = false, isPlayerView = false
         </svg>
       )}
 
-      {}
       {contextMenu.visible && contextMenu.item && createPortal(
         <div
           ref={menuRef}
@@ -227,32 +323,34 @@ const MapLayer = ({ maps, fowCanvasRef, fowEnabled = false, isPlayerView = false
             display: 'flex',
             flexDirection: 'column',
             gap: '8px',
-            minWidth: '175px',
+            minWidth: '185px',
             color: '#e6d5b8'
           }}
         >
           <div className="vtt-gothic-title" style={{ fontSize: '12px', color: '#d4af37', fontWeight: 'bold', textAlign: 'center', borderBottom: '1px solid #6b4c2b', paddingBottom: '5px' }}>
-            {contextMenu.item.type === 'door' ? '🚪 Control de Puerta' : '🪟 Control de Ventana'}
+            {contextMenu.item.type === 'door'
+              ? 'Control de Puerta'
+              : contextMenu.item.type === 'window'
+              ? 'Control de Ventana'
+              : contextMenu.item.type === 'light'
+              ? `${contextMenu.item.name || 'Fuente de Luz'}`
+              : `${contextMenu.item.name || 'Objeto Interactivo'}`}
           </div>
 
-          {contextMenu.item.type === 'door' ? (
+          {contextMenu.item.type === 'door' && (
             <button
               onClick={() => {
                 if (onToggleDoor) onToggleDoor(contextMenu.item.id);
                 setContextMenu({ visible: false, x: 0, y: 0, item: null });
               }}
               className="vtt-brass-btn"
-              style={{
-                padding: '8px 12px',
-                borderRadius: '6px',
-                cursor: 'pointer',
-                fontWeight: 'bold',
-                fontSize: '12px'
-              }}
+              style={{ padding: '8px 12px', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold', fontSize: '12px' }}
             >
-              {contextMenu.item.isOpen ? '🔒 Cerrar Puerta' : '🔓 Abrir Puerta'}
+              {contextMenu.item.isOpen ? 'Cerrar Puerta' : 'Abrir Puerta'}
             </button>
-          ) : (
+          )}
+
+          {contextMenu.item.type === 'window' && (
             <>
               <button
                 onClick={() => {
@@ -260,15 +358,9 @@ const MapLayer = ({ maps, fowCanvasRef, fowEnabled = false, isPlayerView = false
                   setContextMenu({ visible: false, x: 0, y: 0, item: null });
                 }}
                 className="vtt-brass-btn"
-                style={{
-                  padding: '8px 12px',
-                  borderRadius: '6px',
-                  cursor: 'pointer',
-                  fontWeight: 'bold',
-                  fontSize: '12px'
-                }}
+                style={{ padding: '8px 12px', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold', fontSize: '12px' }}
               >
-                {contextMenu.item.isOpen ? '🔒 Cerrar Ventana' : '🔓 Abrir Ventana'}
+                {contextMenu.item.isOpen ? 'Cerrar Ventana' : 'Abrir Ventana'}
               </button>
               {!contextMenu.item.isOpen && (
                 <button
@@ -288,10 +380,36 @@ const MapLayer = ({ maps, fowCanvasRef, fowEnabled = false, isPlayerView = false
                     fontSize: '12px'
                   }}
                 >
-                  💥 Romper Cristal
+                  Romper Cristal
                 </button>
               )}
             </>
+          )}
+
+          {contextMenu.item.type === 'object' && (
+            <button
+              onClick={() => {
+                if (onToggleObject) onToggleObject(contextMenu.item.id);
+                setContextMenu({ visible: false, x: 0, y: 0, item: null });
+              }}
+              className="vtt-brass-btn"
+              style={{ padding: '8px 12px', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold', fontSize: '12px' }}
+            >
+              {contextMenu.item.isOpen ? 'Cerrar / Reiniciar' : 'Abrir / Activar'}
+            </button>
+          )}
+
+          {contextMenu.item.type === 'light' && (
+            <button
+              onClick={() => {
+                if (onToggleLight) onToggleLight(contextMenu.item.id);
+                setContextMenu({ visible: false, x: 0, y: 0, item: null });
+              }}
+              className="vtt-brass-btn"
+              style={{ padding: '8px 12px', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold', fontSize: '12px' }}
+            >
+              {contextMenu.item.isOn !== false ? 'Apagar Luz' : 'Encender Luz'}
+            </button>
           )}
         </div>,
         document.body
@@ -329,14 +447,40 @@ const MapLayer = ({ maps, fowCanvasRef, fowEnabled = false, isPlayerView = false
             <p style={{ whiteSpace: 'pre-wrap', lineHeight: '1.7', margin: 0, fontSize: '18px', fontFamily: "'Crimson Text', Georgia, serif" }}>
               {readingNote.content}
             </p>
-            <button 
-              onClick={() => setReadingNote(null)} 
-              className="vtt-brass-btn"
-              style={{ marginTop: '24px', padding: '10px 22px', borderRadius: '6px', cursor: 'pointer', float: 'right', fontWeight: 'bold' }}
-            >
-              Cerrar Pergamino
-            </button>
-            <div style={{ clear: 'both' }}></div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '24px', gap: '10px' }}>
+              {!isPlayerView && onProjectHandout && (
+                <button
+                  onClick={() => {
+                    onProjectHandout({
+                      type: 'note',
+                      title: readingNote.title,
+                      content: readingNote.content
+                    });
+                    setReadingNote(null);
+                  }}
+                  className="vtt-gothic-title"
+                  style={{
+                    padding: '10px 16px',
+                    borderRadius: '6px',
+                    cursor: 'pointer',
+                    fontWeight: 'bold',
+                    fontSize: '12px',
+                    background: 'linear-gradient(180deg, #b45309 0%, #78350f 100%)',
+                    color: '#fffbeb',
+                    border: '1px solid #fbbf24'
+                  }}
+                >
+                  Proyectar en Pantalla de Jugadores
+                </button>
+              )}
+              <button 
+                onClick={() => setReadingNote(null)} 
+                className="vtt-brass-btn"
+                style={{ padding: '10px 22px', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold', marginLeft: 'auto' }}
+              >
+                Cerrar Pergamino
+              </button>
+            </div>
           </div>
         </div>,
         document.body 

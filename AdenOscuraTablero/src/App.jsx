@@ -1,838 +1,1146 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
+import { emit as tauriEmit, listen as tauriListen } from '@tauri-apps/api/event';
 
 import Toolbar from './components/Toolbar';
 import GameBoard from './components/GameBoard';
 import TokenSidebar from './components/TokenSidebar';
-import SettingsModal from './components/SettingsModal';
+import SettingsDrawer from './components/SettingsDrawer';
 import DiceRoller from './components/DiceRoller';
 import Soundboard, { playerSoundEngine, SOUND_CATALOG } from './components/Soundboard';
+import TutorialModal from './components/TutorialModal';
+import MapCreator from './components/MapCreator';
 import { WEATHER_TYPES, AMBIENT_TINTS } from './components/WeatherOverlay';
 import useLocalStorage from './hooks/useLocalStorage';
+import { saveCampaignToDB, loadCampaignFromDB, exportCampaignJSON } from './utils/campaignStorage';
 
-const ccw = (A, B, C) => (C.y - A.y) * (B.x - A.x) > (B.y - A.y) * (C.x - A.x);
-const segmentsIntersect = (A, B, C, D) => ccw(A, C, D) !== ccw(B, C, D) && ccw(A, B, C) !== ccw(A, B, D);
+const isTauriDesktop = () => Boolean(window.__TAURI_INTERNALS__ || window.__TAURI__);
 
-const distToSegment = (p, v, w) => {
-  const l2 = (w.x - v.x) ** 2 + (w.y - v.y) ** 2;
-  if (l2 === 0) return Math.hypot(p.x - v.x, p.y - v.y);
-  let t = ((p.x - v.x) * (w.x - v.x) + (p.y - v.y) * (w.y - v.y)) / l2;
-  t = Math.max(0, Math.min(1, t));
-  return Math.hypot(p.x - (v.x + t * (w.x - v.x)), p.y - (v.y + t * (w.y - v.y)));
+const DEFAULT_STATUSES = [
+  { id: 'bloodied', icon: '🩸', label: 'Malherido', effect: 'none' },
+  { id: 'poisoned', icon: '🤢', label: 'Envenenado', effect: 'none' },
+  { id: 'stunned', icon: '💫', label: 'Aturdido', effect: 'immobilize' },
+  { id: 'burning', icon: '🔥', label: 'Ardiendo', effect: 'none' }
+];
+
+// Comprobación geométrica de colisión segmento-segmento
+const segmentsIntersect = (ax, ay, bx, by, cx, cy, dx, dy) => {
+  const ccw = (p1x, p1y, p2x, p2y, p3x, p3y) =>
+    (p3y - p1y) * (p2x - p1x) > (p2y - p1y) * (p3x - p1x);
+  return (
+    ccw(ax, ay, cx, cy, dx, dy) !== ccw(bx, by, cx, cy, dx, dy) &&
+    ccw(ax, ay, bx, by, cx, cy) !== ccw(ax, ay, bx, by, dx, dy)
+  );
 };
 
-// Interpolación angular por el camino más corto (evita saltos bruscos entre 359º y 0º)
-const lerpAngle = (current, target, factor) => {
-  const diff = ((((target - current) % 360) + 540) % 360) - 180;
-  return (((current + diff * factor) % 360) + 360) % 360;
-};
-
-// Persistencia en IndexedDB para mapas pesados (sin el límite de 5MB de localStorage)
-const openMapDB = () => new Promise((resolve, reject) => {
-  const req = window.indexedDB.open('vtt_maps_db', 1);
-  req.onupgradeneeded = (e) => {
-    const db = e.target.result;
-    if (!db.objectStoreNames.contains('maps_store')) {
-      db.createObjectStore('maps_store');
-    }
-  };
-  req.onsuccess = () => resolve(req.result);
-  req.onerror = () => reject(req.error);
-});
-
-const saveMapsToDB = async (mapsData) => {
-  try {
-    const db = await openMapDB();
-    const tx = db.transaction('maps_store', 'readwrite');
-    tx.objectStore('maps_store').put(mapsData, 'active_maps');
-  } catch (e) {}
-};
-
-const loadMapsFromDB = async () => {
-  try {
-    const db = await openMapDB();
-    return await new Promise((resolve) => {
-      const tx = db.transaction('maps_store', 'readonly');
-      const req = tx.objectStore('maps_store').get('active_maps');
-      req.onsuccess = () => resolve(Array.isArray(req.result) ? req.result : []);
-      req.onerror = () => resolve([]);
-    });
-  } catch (e) {
-    return [];
+const GLOBAL_VTT_STYLES = `
+  html, body, #root {
+    margin: 0 !important;
+    padding: 0 !important;
+    width: 100% !important;
+    height: 100% !important;
+    overflow: hidden !important;
+    background-color: #0e0906 !important;
+    box-sizing: border-box;
   }
+  *, *::before, *::after {
+    box-sizing: border-box;
+  }
+  .vtt-gothic-title {
+    font-family: 'Cinzel', Georgia, serif;
+    letter-spacing: 0.04em;
+    text-shadow: 0 2px 4px rgba(0, 0, 0, 0.9);
+  }
+  .vtt-wood-panel {
+    background: linear-gradient(180deg, #241710 0%, #140c08 100%);
+    border: 2px solid #8a6d3b;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.9), inset 0 1px 0 rgba(212, 175, 55, 0.2);
+  }
+  .vtt-brass-btn {
+    font-family: 'Cinzel', Georgia, serif;
+    background: linear-gradient(180deg, #3a2618 0%, #1c120c 100%);
+    color: #f3e5ab;
+    border: 1px solid #8a6d3b;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.75), inset 0 1px 0 rgba(212, 175, 55, 0.25);
+    transition: all 0.15s ease;
+  }
+  .vtt-brass-btn:hover:not(:disabled) {
+    background: linear-gradient(180deg, #4d3320 0%, #291a11 100%);
+    border-color: #d4af37;
+    color: #fffbeb;
+  }
+`;
+
+// Componente de Proyección a Pantalla Completa (Ilustración o Pergamino)
+const HandoutFullscreenOverlay = ({ handout, isPlayerView, onClose }) => {
+  if (!handout) return null;
+
+  return (
+    <div
+      onClick={!isPlayerView ? onClose : undefined}
+      style={{
+        position: 'fixed',
+        inset: 0,
+        zIndex: 95000,
+        backgroundColor: 'rgba(5, 3, 2, 0.94)',
+        backdropFilter: 'blur(8px)',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: '32px'
+      }}
+    >
+      {handout.type === 'note' ? (
+        <div
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            background: 'radial-gradient(circle, #f7ebd2 0%, #dcc196 100%)',
+            padding: '42px',
+            borderRadius: '10px',
+            width: '620px',
+            maxWidth: '92vw',
+            maxHeight: '85vh',
+            overflowY: 'auto',
+            color: '#3b2314',
+            boxShadow: '0 25px 70px rgba(0,0,0,0.98), inset 0 0 40px rgba(120, 53, 15, 0.35)',
+            border: '5px double #5c3a21'
+          }}
+        >
+          <h2
+            className="vtt-gothic-title"
+            style={{
+              margin: '0 0 18px 0',
+              borderBottom: '2px solid #8a6d3b',
+              paddingBottom: '12px',
+              fontSize: '28px',
+              color: '#451a03',
+              textShadow: 'none'
+            }}
+          >
+            📜 {handout.title}
+          </h2>
+          <p
+            style={{
+              whiteSpace: 'pre-wrap',
+              lineHeight: '1.8',
+              margin: 0,
+              fontSize: '21px',
+              fontFamily: "'Crimson Text', Georgia, serif"
+            }}
+          >
+            {handout.content}
+          </p>
+        </div>
+      ) : (
+        <div
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            gap: '16px',
+            maxWidth: '92vw',
+            maxHeight: '88vh'
+          }}
+        >
+          <div
+            style={{
+              border: '4px double #d4af37',
+              borderRadius: '10px',
+              overflow: 'hidden',
+              boxShadow: '0 25px 70px rgba(0,0,0,0.98), 0 0 35px rgba(212, 175, 55, 0.25)',
+              backgroundColor: '#090604',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center'
+            }}
+          >
+            <img
+              src={handout.src}
+              alt={handout.title}
+              style={{
+                maxWidth: '88vw',
+                maxHeight: '78vh',
+                objectFit: 'contain',
+                display: 'block'
+              }}
+            />
+          </div>
+          {handout.title && (
+            <div
+              className="vtt-gothic-title"
+              style={{
+                padding: '8px 26px',
+                background: 'linear-gradient(180deg, #2b1b12 0%, #140c08 100%)',
+                border: '2px solid #d4af37',
+                borderRadius: '6px',
+                color: '#f3e5ab',
+                fontSize: '18px',
+                fontWeight: 'bold',
+                boxShadow: '0 10px 25px rgba(0,0,0,0.9)'
+              }}
+            >
+              {handout.title}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
 };
 
-const App = () => {
+function App() {
   const isPlayerView = new URLSearchParams(window.location.search).get('view') === 'player';
 
   const [characters, setCharacters] = useLocalStorage('vtt_characters', []);
   const [tokens, setTokens] = useLocalStorage('vtt_tokens', []);
-  const [maps, setMaps] = useState([]); 
-  const [fowActions, setFowActions] = useLocalStorage('vtt_fowActions', []);
-  const [customStatuses, setCustomStatuses] = useLocalStorage('vtt_statuses', []);
+  const [maps, setMaps] = useState([]);
+  const [customStatuses, setCustomStatuses] = useLocalStorage('vtt_statuses', DEFAULT_STATUSES);
+  const [customSounds, setCustomSounds] = useState([]);
 
-  const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
-  
-  const [fowEnabled, setFowEnabled] = useLocalStorage('vtt_fowEnabled', false);
+  // Gestor de Múltiples Escenas / Planos y Galería de Ilustraciones (Handouts)
+  const [scenes, setScenes] = useState([
+    { id: 'scene_default', name: 'Escena Principal', maps: [], tokens: [], fowActions: [], weatherEffect: 'none', ambientTint: 'none' }
+  ]);
+  const [activeSceneId, setActiveSceneId] = useLocalStorage('vtt_active_scene_id', 'scene_default');
+  const [handouts, setHandouts] = useState([]);
+  const [activeHandout, setActiveHandout] = useState(null);
+
+  const [fowEnabled, setFowEnabled] = useLocalStorage('vtt_fow_enabled', false);
+  const [fowBrushSize, setFowBrushSize] = useLocalStorage('vtt_fow_brush', 80);
+  const [fowVisionRadius, setFowVisionRadius] = useLocalStorage('vtt_fow_vision_radius', 180);
+  const [fowMemoryEnabled, setFowMemoryEnabled] = useLocalStorage('vtt_fow_memory', true);
+  const [fowAutoHideEnemies, setFowAutoHideEnemies] = useLocalStorage('vtt_fow_autohide_enemies', true);
   const [fowMode, setFowMode] = useState('none');
-  const [fowBrushSize, setFowBrushSize] = useState(100);
-  const [fowVisionRadius, setFowVisionRadius] = useLocalStorage('vtt_fowVisionRadius', 180);
-  const [fowMemoryEnabled, setFowMemoryEnabled] = useLocalStorage('vtt_fowMemoryEnabled', true);
-  const [fowAutoHideEnemies, setFowAutoHideEnemies] = useLocalStorage('vtt_fowAutoHideEnemies', true);
+  const [fowActions, setFowActions] = useLocalStorage('vtt_fow_actions', []);
 
-  const [weatherEffect, setWeatherEffect] = useLocalStorage('vtt_weatherEffect', 'none');
-  const [ambientTint, setAmbientTint] = useLocalStorage('vtt_ambientTint', 'none');
-  const [isWeatherMenuOpen, setIsWeatherMenuOpen] = useState(false);
-  
-  const [snapToGrid, setSnapToGrid] = useLocalStorage('vtt_snapToGrid', false);
-  const [gridSize, setGridSize] = useLocalStorage('vtt_gridSize', 50);
-  
+  const [weatherEffect, setWeatherEffect] = useLocalStorage('vtt_weather_effect', 'none');
+  const [ambientTint, setAmbientTint] = useLocalStorage('vtt_ambient_tint', 'none');
+
+  const [snapToGrid, setSnapToGrid] = useLocalStorage('vtt_snap_grid', true);
+  const [gridSize, setGridSize] = useLocalStorage('vtt_grid_size', 50);
+
   const [scale, setScale] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [isDraggingPan, setIsDraggingPan] = useState(false);
-  const [isHudMinimized, setIsHudMinimized] = useState(false);
-  
   const [draggedToken, setDraggedToken] = useState(null);
   const [rotatingToken, setRotatingToken] = useState(null);
-  const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
-  
+  const [isPaintingFow, setIsPaintingFow] = useState(false);
+
   const [rulerActive, setRulerActive] = useState(false);
   const [rulerMeasure, setRulerMeasure] = useState(null);
   const [pingActive, setPingActive] = useState(false);
   const [pings, setPings] = useState([]);
+  const [syncPlayerCamera, setSyncPlayerCamera] = useLocalStorage('vtt_sync_camera', true);
 
-  const [activeSoundLoops, setActiveSoundLoops] = useState([]);
+  const [radialMenu, setRadialMenu] = useState(null);
+  const [holdProgress, setHoldProgress] = useState(null);
+
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isMapCreatorOpen, setIsMapCreatorOpen] = useState(false);
+  const [hideTutorialPermanently, setHideTutorialPermanently] = useLocalStorage('vtt_hide_tutorial', false);
+  const [isTutorialOpen, setIsTutorialOpen] = useState(() => !isPlayerView && !hideTutorialPermanently);
+
+  const [activeLoops, setActiveLoops] = useState([]);
   const [masterToast, setMasterToast] = useState(null);
 
   const boardRef = useRef(null);
-  const campaignInputRef = useRef(null);
   const fowCanvasRef = useRef(null);
-  const pingTimerRef = useRef(null);
-  const toastTimerRef = useRef(null);
-  const downPosRef = useRef(null);
+  const campaignFileInputRef = useRef(null);
   const syncChannelRef = useRef(null);
-  const latestStateRef = useRef({});
-  const panStartRef = useRef({ x: 0, y: 0 });
-  const lastFowTrailRef = useRef({});
-  const lastBrushPosRef = useRef(null);
-  const walkAnchorRef = useRef({});
-  const mapsLoadedRef = useRef(false);
+  const holdTimerRef = useRef(null);
+  const holdStartPosRef = useRef(null);
 
-  // Cargar mapas guardados en IndexedDB al iniciar para que nunca desaparezcan por recargas o gestos
+  const postSyncMessage = (msg) => {
+    if (syncChannelRef.current) {
+      syncChannelRef.current.postMessage(msg);
+    }
+    if (isTauriDesktop()) {
+      tauriEmit('vtt_tauri_sync', msg).catch(() => {});
+    }
+  };
+
+  // Cargar campaña robusta desde IndexedDB al iniciar
+  useEffect(() => {
+    loadCampaignFromDB().then((saved) => {
+      if (saved) {
+        if (Array.isArray(saved.maps)) setMaps(saved.maps);
+        if (Array.isArray(saved.customSounds)) setCustomSounds(saved.customSounds);
+        if (Array.isArray(saved.handouts)) setHandouts(saved.handouts);
+        if (Array.isArray(saved.scenes) && saved.scenes.length > 0) {
+          setScenes(saved.scenes);
+        } else if (Array.isArray(saved.maps)) {
+          setScenes([
+            {
+              id: activeSceneId || 'scene_default',
+              name: 'Escena Principal',
+              maps: saved.maps,
+              tokens: saved.tokens || [],
+              fowActions: saved.fowActions || [],
+              weatherEffect: saved.weatherEffect || 'none',
+              ambientTint: saved.ambientTint || 'none'
+            }
+          ]);
+        }
+      }
+    });
+  }, []);
+
+  // Mantener sincronizada la escena activa dentro del array de escenas cada vez que el Master mueve fichas o edita el mapa
   useEffect(() => {
     if (isPlayerView) return;
-    loadMapsFromDB().then((savedMaps) => {
-      if (savedMaps && savedMaps.length > 0) {
-        setMaps(savedMaps);
-      }
-      mapsLoadedRef.current = true;
-    });
-  }, [isPlayerView]);
+    setScenes((prevScenes) =>
+      prevScenes.map((sc) =>
+        sc.id === activeSceneId
+          ? { ...sc, maps, tokens, fowActions, weatherEffect, ambientTint }
+          : sc
+      )
+    );
+  }, [isPlayerView, activeSceneId, maps, tokens, fowActions, weatherEffect, ambientTint]);
 
+  // Auto-guardado en IndexedDB
   useEffect(() => {
-    if (isPlayerView || !mapsLoadedRef.current) return;
-    saveMapsToDB(maps);
-  }, [maps, isPlayerView]);
+    if (isPlayerView) return;
+    saveCampaignToDB({
+      characters,
+      tokens,
+      maps,
+      scenes,
+      activeSceneId,
+      handouts,
+      customStatuses,
+      customSounds,
+      fowEnabled,
+      fowVisionRadius,
+      fowMemoryEnabled,
+      fowAutoHideEnemies,
+      fowActions,
+      weatherEffect,
+      ambientTint,
+      snapToGrid,
+      gridSize
+    });
+  }, [
+    isPlayerView, characters, tokens, maps, scenes, activeSceneId, handouts,
+    customStatuses, customSounds, fowEnabled, fowVisionRadius, fowMemoryEnabled,
+    fowAutoHideEnemies, fowActions, weatherEffect, ambientTint, snapToGrid, gridSize
+  ]);
 
-  const isMovementBlocked = (startX, startY, targetX, targetY, tokenSize) => {
-    const r = (tokenSize || gridSize) * 0.35;
-    const pStart = { x: startX + (tokenSize || gridSize) / 2, y: startY + (tokenSize || gridSize) / 2 };
-    const pEnd = { x: targetX + (tokenSize || gridSize) / 2, y: targetY + (tokenSize || gridSize) / 2 };
+  // Canal de sincronización en vivo entre Pantalla de Master y Pantalla de Jugadores (Web + Tauri IPC)
+  useEffect(() => {
+    const channel = new BroadcastChannel('vtt_live_sync_channel');
+    syncChannelRef.current = channel;
 
-    for (const el of maps) {
-      let seg = null;
+    const handleIncomingSync = (msg) => {
+      if (!msg || !msg.type) return;
+
+      if (isPlayerView) {
+        if (msg.type === 'STATE_SYNC') {
+          const s = msg.payload;
+          if (s.tokens) setTokens(s.tokens);
+          if (s.maps) setMaps(s.maps);
+          if (s.customStatuses) setCustomStatuses(s.customStatuses);
+          if (typeof s.fowEnabled === 'boolean') setFowEnabled(s.fowEnabled);
+          if (s.fowVisionRadius) setFowVisionRadius(s.fowVisionRadius);
+          if (typeof s.fowMemoryEnabled === 'boolean') setFowMemoryEnabled(s.fowMemoryEnabled);
+          if (typeof s.fowAutoHideEnemies === 'boolean') setFowAutoHideEnemies(s.fowAutoHideEnemies);
+          if (s.fowActions) setFowActions(s.fowActions);
+          if (s.weatherEffect) setWeatherEffect(s.weatherEffect);
+          if (s.ambientTint) setAmbientTint(s.ambientTint);
+          if (typeof s.snapToGrid === 'boolean') setSnapToGrid(s.snapToGrid);
+          if (s.gridSize) setGridSize(s.gridSize);
+          if (s.activeHandout !== undefined) setActiveHandout(s.activeHandout);
+          if (s.syncPlayerCamera !== false) {
+            if (s.pan) setPan(s.pan);
+            if (s.scale) setScale(s.scale);
+          }
+        } else if (msg.type === 'PING') {
+          setPings(prev => [...prev, msg.payload]);
+          setTimeout(() => {
+            setPings(prev => prev.filter(p => p.id !== msg.payload.id));
+          }, 3600);
+        } else if (msg.type === 'SOUND_PLAY') {
+          playerSoundEngine.play(msg.payload);
+        } else if (msg.type === 'SOUND_STOP_ALL') {
+          playerSoundEngine.stopAll();
+        }
+      } else if (msg.type === 'REQUEST_INITIAL_SYNC') {
+        postSyncMessage({
+          type: 'STATE_SYNC',
+          payload: {
+            tokens, maps, customStatuses, fowEnabled, fowVisionRadius,
+            fowMemoryEnabled, fowAutoHideEnemies, fowActions,
+            weatherEffect, ambientTint, snapToGrid, gridSize, pan, scale, syncPlayerCamera, activeHandout
+          }
+        });
+      }
+    };
+
+    channel.onmessage = (event) => handleIncomingSync(event.data);
+
+    let unlistenTauri = null;
+    if (isTauriDesktop()) {
+      tauriListen('vtt_tauri_sync', (event) => {
+        handleIncomingSync(event.payload);
+      }).then((fn) => {
+        unlistenTauri = fn;
+      }).catch(() => {});
+    }
+
+    if (isPlayerView) {
+      postSyncMessage({ type: 'REQUEST_INITIAL_SYNC' });
+    }
+
+    return () => {
+      channel.close();
+      if (unlistenTauri) unlistenTauri();
+    };
+  }, [
+    isPlayerView, tokens, maps, customStatuses, fowEnabled, fowVisionRadius,
+    fowMemoryEnabled, fowAutoHideEnemies, fowActions, weatherEffect, ambientTint,
+    snapToGrid, gridSize, pan, scale, syncPlayerCamera, activeHandout
+  ]);
+
+  // Emitir sincronización cada vez que el Master actualiza el tablero o proyecta una imagen
+  useEffect(() => {
+    if (isPlayerView) return;
+    postSyncMessage({
+      type: 'STATE_SYNC',
+      payload: {
+        tokens, maps, customStatuses, fowEnabled, fowVisionRadius,
+        fowMemoryEnabled, fowAutoHideEnemies, fowActions,
+        weatherEffect, ambientTint, snapToGrid, gridSize, pan, scale, syncPlayerCamera, activeHandout
+      }
+    });
+  }, [
+    isPlayerView, tokens, maps, customStatuses, fowEnabled, fowVisionRadius,
+    fowMemoryEnabled, fowAutoHideEnemies, fowActions, weatherEffect, ambientTint,
+    snapToGrid, gridSize, pan, scale, syncPlayerCamera, activeHandout
+  ]);
+
+  // Cambiar de Escena / Plano
+  const handleSelectScene = (targetSceneId) => {
+    const target = scenes.find((sc) => sc.id === targetSceneId);
+    if (!target) return;
+    setActiveSceneId(target.id);
+    setMaps(target.maps || []);
+    setTokens(target.tokens || []);
+    setFowActions(target.fowActions || []);
+    setWeatherEffect(target.weatherEffect || 'none');
+    setAmbientTint(target.ambientTint || 'none');
+    setPan({ x: 0, y: 0 });
+    showMasterFeedback(`Escena activa: ${target.name}`, '🗺️');
+  };
+
+  // Crear nueva escena limpia
+  const handleCreateNewScene = (sceneName) => {
+    const newId = `scene_${Date.now()}`;
+    const newSceneObj = {
+      id: newId,
+      name: sceneName,
+      maps: [],
+      tokens: [],
+      fowActions: [],
+      weatherEffect: 'none',
+      ambientTint: 'none'
+    };
+    setScenes((prev) => [...prev, newSceneObj]);
+    setActiveSceneId(newId);
+    setMaps([]);
+    setTokens([]);
+    setFowActions([]);
+    setWeatherEffect('none');
+    setAmbientTint('none');
+    setPan({ x: 0, y: 0 });
+    showMasterFeedback(`Nueva escena creada: ${sceneName}`, '🗺️');
+  };
+
+  // Eliminar escena
+  const handleDeleteScene = (sceneIdToDelete) => {
+    if (scenes.length <= 1) return;
+    const remaining = scenes.filter((sc) => sc.id !== sceneIdToDelete);
+    setScenes(remaining);
+    if (activeSceneId === sceneIdToDelete) {
+      const next = remaining[0];
+      setActiveSceneId(next.id);
+      setMaps(next.maps || []);
+      setTokens(next.tokens || []);
+      setFowActions(next.fowActions || []);
+      setWeatherEffect(next.weatherEffect || 'none');
+      setAmbientTint(next.ambientTint || 'none');
+    }
+    showMasterFeedback('Escena eliminada', '🗑️');
+  };
+
+  // Atajos de teclado globales del Master
+  useEffect(() => {
+    if (isPlayerView) return;
+    const handleKeyDown = (e) => {
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
+      if (e.key === 'Escape') {
+        setRadialMenu(null);
+        setRulerActive(false);
+        setPingActive(false);
+        setFowMode('none');
+        if (activeHandout) setActiveHandout(null);
+      } else if (e.code === 'Space' && !isSettingsOpen) {
+        e.preventDefault();
+        const allies = tokens.filter(t => t.faction !== 'enemy' && !t.isHidden);
+        const targetList = allies.length > 0 ? allies : tokens;
+        if (targetList.length > 0) {
+          const avgX = targetList.reduce((acc, t) => acc + t.x + (t.size || 50) / 2, 0) / targetList.length;
+          const avgY = targetList.reduce((acc, t) => acc + t.y + (t.size || 50) / 2, 0) / targetList.length;
+          setPan({
+            x: window.innerWidth / 2 - avgX * scale,
+            y: window.innerHeight / 2 - avgY * scale
+          });
+          showMasterFeedback('Cámara centrada en el grupo', '🎯');
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isPlayerView, isSettingsOpen, tokens, scale, activeHandout]);
+
+  const showMasterFeedback = (label, icon = '⚜️') => {
+    setMasterToast({ label, icon });
+    setTimeout(() => setMasterToast(null), 2600);
+  };
+
+  const clearHoldTimer = () => {
+    if (holdTimerRef.current) {
+      clearTimeout(holdTimerRef.current);
+      holdTimerRef.current = null;
+    }
+    setHoldProgress(null);
+  };
+
+  const emitSpatialPing = (x, y, sound = null) => {
+    const newPing = {
+      id: Date.now() + Math.random(),
+      x,
+      y,
+      icon: sound ? sound.icon : '🔔',
+      label: sound ? sound.label : '¡Atención!',
+      color: sound ? '#fbbf24' : '#d4af37',
+      isSoundWave: Boolean(sound)
+    };
+    setPings(prev => [...prev, newPing]);
+    postSyncMessage({ type: 'PING', payload: newPing });
+    if (sound) {
+      postSyncMessage({ type: 'SOUND_PLAY', payload: sound });
+      showMasterFeedback(`Eco en el mapa: ${sound.label}`, sound.icon);
+    } else {
+      showMasterFeedback('Señal enviada a los jugadores', '🔔');
+    }
+    setTimeout(() => {
+      setPings(prev => prev.filter(p => p.id !== newPing.id));
+    }, 3600);
+  };
+
+  const getLogicalCoords = (e) => {
+    const rect = boardRef.current.getBoundingClientRect();
+    return {
+      x: (e.clientX - rect.left - pan.x) / scale,
+      y: (e.clientY - rect.top - pan.y) / scale
+    };
+  };
+
+  const isMovementBlocked = (fromX, fromY, toX, toY) => {
+    for (let i = 0; i < maps.length; i++) {
+      const el = maps[i];
       if (el.type === 'wall') {
-        seg = { A: { x: el.x1, y: el.y1 }, B: { x: el.x2, y: el.y2 } };
+        if (segmentsIntersect(fromX, fromY, toX, toY, el.x1, el.y1, el.x2, el.y2)) return true;
       } else if ((el.type === 'door' || el.type === 'window') && !el.isOpen) {
         const w = el.width || 60;
         const h = el.height || 16;
-        if (w >= h) {
-          seg = { A: { x: el.x, y: el.y + h / 2 }, B: { x: el.x + w, y: el.y + h / 2 } };
-        } else {
-          seg = { A: { x: el.x + w / 2, y: el.y }, B: { x: el.x + w / 2, y: el.y + h } };
+        const x1 = w >= h ? el.x : el.x + w / 2;
+        const y1 = w >= h ? el.y + h / 2 : el.y;
+        const x2 = w >= h ? el.x + w : el.x + w / 2;
+        const y2 = w >= h ? el.y + h / 2 : el.y + h;
+        if (segmentsIntersect(fromX, fromY, toX, toY, x1, y1, x2, y2)) return true;
+      } else if (el.type === 'object' && el.blocksMovement && !el.isOpen) {
+        const w = el.width || 48;
+        const h = el.height || 48;
+        if (
+          toX >= el.x && toX <= el.x + w &&
+          toY >= el.y && toY <= el.y + h
+        ) {
+          return true;
         }
-      }
-
-      if (seg) {
-        if (segmentsIntersect(pStart, pEnd, seg.A, seg.B)) return true;
-        if (distToSegment(pEnd, seg.A, seg.B) < r) return true;
       }
     }
     return false;
   };
 
-  const handleGridSizeChange = (newSize) => {
-    const ratio = newSize / (gridSize || 50);
-    setGridSize(newSize);
-    setTokens(prev => prev.map(t => ({
-      ...t,
-      size: Math.max(20, Math.round((t.size || gridSize) * ratio))
-    })));
-  };
-
-  const handleOpenPlayerView = () => {
-    const url = `${window.location.origin}${window.location.pathname}?view=player`;
-    window.open(url, 'VTT_Player_View', 'width=1280,height=800,menubar=no,toolbar=no,location=no,status=no');
-  };
-
-  const handleToggleFullscreen = () => {
-    if (!document.fullscreenElement) {
-      document.documentElement.requestFullscreen().catch(() => {});
-    } else if (document.exitFullscreen) {
-      document.exitFullscreen().catch(() => {});
-    }
-  };
-
-  const spawnPing = (x, y) => {
-    const newPing = { id: `ping_${Date.now()}_${Math.random()}`, x, y };
-    setPings(prev => [...prev, newPing]);
-    if (syncChannelRef.current) {
-      syncChannelRef.current.postMessage({ type: 'SPAWN_PING', payload: newPing });
-    }
-    setTimeout(() => {
-      setPings(prev => prev.filter(p => p.id !== newPing.id));
-    }, 3200);
-  };
-
-  const showMasterSoundToast = (soundObj) => {
-    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
-    setMasterToast(soundObj);
-    toastTimerRef.current = setTimeout(() => {
-      setMasterToast(null);
-    }, 3000);
-  };
-
-  const handleTriggerSound = (sound) => {
-    if (!sound) return;
-    if (sound.loop) {
-      const exists = activeSoundLoops.includes(sound.id);
-      const nextLoops = exists
-        ? activeSoundLoops.filter(id => id !== sound.id)
-        : [...activeSoundLoops, sound.id];
-      setActiveSoundLoops(nextLoops);
-      showMasterSoundToast({
-        icon: sound.icon,
-        label: exists ? `Detenido: ${sound.label}` : `Ambiente activo: ${sound.label}`
-      });
-    } else {
-      showMasterSoundToast({ icon: sound.icon, label: sound.label });
-    }
-
-    if (syncChannelRef.current) {
-      syncChannelRef.current.postMessage({ type: 'PLAY_SOUND', payload: { id: sound.id } });
-    }
-  };
-
-  const handleStopAllSounds = () => {
-    setActiveSoundLoops([]);
-    showMasterSoundToast({ icon: '🔇', label: 'Todos los sonidos detenidos' });
-    if (syncChannelRef.current) {
-      syncChannelRef.current.postMessage({ type: 'STOP_ALL_SOUNDS' });
-    }
-  };
-
-  const handleToggleDoor = (doorId) => {
-    let openedNow = false;
-    setMaps(prev => prev.map(el => {
-      if (el.id === doorId && el.type === 'door') {
-        openedNow = !el.isOpen;
-        return { ...el, isOpen: !el.isOpen };
-      }
-      return el;
-    }));
-    const doorSound = SOUND_CATALOG.find(s => s.id === (openedNow ? 'sfx_door_open' : 'sfx_door_slam'));
-    if (doorSound) {
-      handleTriggerSound(doorSound);
-    }
-  };
-
-  const handleToggleWindow = (windowId, breakGlass = false) => {
-    let openedNow = false;
-    setMaps(prev => prev.map(el => {
-      if (el.id === windowId && el.type === 'window') {
-        openedNow = breakGlass ? true : !el.isOpen;
-        return { ...el, isOpen: openedNow, isBroken: breakGlass ? true : el.isBroken };
-      }
-      return el;
-    }));
-    const soundId = breakGlass ? 'sfx_glass' : (openedNow ? 'sfx_door_open' : 'sfx_door_slam');
-    const winSound = SOUND_CATALOG.find(s => s.id === soundId);
-    if (winSound) {
-      handleTriggerSound(winSound);
-    }
-  };
-
-  useEffect(() => {
-    latestStateRef.current = {
-      maps, tokens, fowEnabled, fowActions, fowVisionRadius, fowMemoryEnabled, fowAutoHideEnemies,
-      weatherEffect, ambientTint, snapToGrid, gridSize, customStatuses, rulerMeasure
-    };
-  }, [maps, tokens, fowEnabled, fowActions, fowVisionRadius, fowMemoryEnabled, fowAutoHideEnemies, weatherEffect, ambientTint, snapToGrid, gridSize, customStatuses, rulerMeasure]);
-
-  useEffect(() => {
-    const channel = new BroadcastChannel('vtt_realtime_sync');
-    syncChannelRef.current = channel;
-
-    channel.onmessage = (event) => {
-      const { type, payload } = event.data || {};
-
-      if (type === 'SPAWN_PING' && payload) {
-        setPings(prev => [...prev, payload]);
-        setTimeout(() => {
-          setPings(prev => prev.filter(p => p.id !== payload.id));
-        }, 3200);
-      }
-
-      if (type === 'SYNC_RULER') {
-        setRulerMeasure(payload);
-      }
-
-      if (isPlayerView) {
-        if (type === 'PLAY_SOUND' && payload) {
-          playerSoundEngine.play(payload.id);
-        }
-        if (type === 'STOP_ALL_SOUNDS') {
-          playerSoundEngine.stopAll();
-        }
-
-        if (type === 'SYNC_MAPS' && Array.isArray(payload)) {
-          setMaps(payload);
-        }
-        if (type === 'SYNC_TOKENS' && Array.isArray(payload)) {
-          setTokens(payload);
-        }
-        if (type === 'SYNC_FOW' && Array.isArray(payload)) {
-          setFowActions(payload);
-        }
-        if (type === 'SYNC_SETTINGS' && payload) {
-          if (payload.fowEnabled !== undefined) setFowEnabled(payload.fowEnabled);
-          if (payload.fowVisionRadius !== undefined) setFowVisionRadius(payload.fowVisionRadius);
-          if (payload.fowMemoryEnabled !== undefined) setFowMemoryEnabled(payload.fowMemoryEnabled);
-          if (payload.fowAutoHideEnemies !== undefined) setFowAutoHideEnemies(payload.fowAutoHideEnemies);
-          if (payload.weatherEffect !== undefined) setWeatherEffect(payload.weatherEffect);
-          if (payload.ambientTint !== undefined) setAmbientTint(payload.ambientTint);
-          if (payload.snapToGrid !== undefined) setSnapToGrid(payload.snapToGrid);
-          if (payload.gridSize !== undefined) setGridSize(payload.gridSize);
-          if (payload.customStatuses !== undefined) setCustomStatuses(payload.customStatuses);
-          if (payload.rulerMeasure !== undefined) setRulerMeasure(payload.rulerMeasure);
-        }
-
-        if (type === 'SYNC_STATE' && payload) {
-          if (payload.maps !== undefined) setMaps(payload.maps);
-          if (payload.tokens !== undefined) setTokens(payload.tokens);
-          if (payload.fowEnabled !== undefined) setFowEnabled(payload.fowEnabled);
-          if (payload.fowActions !== undefined) setFowActions(payload.fowActions);
-          if (payload.fowVisionRadius !== undefined) setFowVisionRadius(payload.fowVisionRadius);
-          if (payload.fowMemoryEnabled !== undefined) setFowMemoryEnabled(payload.fowMemoryEnabled);
-          if (payload.fowAutoHideEnemies !== undefined) setFowAutoHideEnemies(payload.fowAutoHideEnemies);
-          if (payload.weatherEffect !== undefined) setWeatherEffect(payload.weatherEffect);
-          if (payload.ambientTint !== undefined) setAmbientTint(payload.ambientTint);
-          if (payload.snapToGrid !== undefined) setSnapToGrid(payload.snapToGrid);
-          if (payload.gridSize !== undefined) setGridSize(payload.gridSize);
-          if (payload.customStatuses !== undefined) setCustomStatuses(payload.customStatuses);
-          if (payload.rulerMeasure !== undefined) setRulerMeasure(payload.rulerMeasure);
-        }
-      } else {
-        if (type === 'REQUEST_INITIAL_STATE') {
-          channel.postMessage({
-            type: 'SYNC_STATE',
-            payload: latestStateRef.current
-          });
-        }
-      }
-    };
-
-    if (isPlayerView) {
-      channel.postMessage({ type: 'REQUEST_INITIAL_STATE' });
-    }
-
-    return () => channel.close();
-  }, [isPlayerView, setTokens, setFowActions, setCustomStatuses, setFowEnabled, setFowVisionRadius, setFowMemoryEnabled, setFowAutoHideEnemies, setWeatherEffect, setAmbientTint, setSnapToGrid, setGridSize]);
-
-  // Enviar mapas SOLO cuando cambian los mapas (evita reenviar imágenes pesadas al girar o mover tokens)
-  useEffect(() => {
-    if (isPlayerView || !syncChannelRef.current || !mapsLoadedRef.current) return;
-    syncChannelRef.current.postMessage({ type: 'SYNC_MAPS', payload: maps });
-  }, [isPlayerView, maps]);
-
-  useEffect(() => {
-    if (isPlayerView || !syncChannelRef.current) return;
-    syncChannelRef.current.postMessage({ type: 'SYNC_TOKENS', payload: tokens });
-  }, [isPlayerView, tokens]);
-
-  useEffect(() => {
-    if (isPlayerView || !syncChannelRef.current) return;
-    syncChannelRef.current.postMessage({ type: 'SYNC_FOW', payload: fowActions });
-  }, [isPlayerView, fowActions]);
-
-  useEffect(() => {
-    if (isPlayerView || !syncChannelRef.current) return;
-    syncChannelRef.current.postMessage({
-      type: 'SYNC_SETTINGS',
-      payload: { fowEnabled, fowVisionRadius, fowMemoryEnabled, fowAutoHideEnemies, weatherEffect, ambientTint, snapToGrid, gridSize, customStatuses, rulerMeasure }
-    });
-  }, [isPlayerView, fowEnabled, fowVisionRadius, fowMemoryEnabled, fowAutoHideEnemies, weatherEffect, ambientTint, snapToGrid, gridSize, customStatuses, rulerMeasure]);
-  // Registra un punto de memoria explorada solo cuando la ficha se ha desplazado o girado lo suficiente
-  const revealTokenVision = (tokenObj, customX, customY, customRotation, customVisionMode, force = false) => {
-    if (!fowEnabled || !fowMemoryEnabled || !tokenObj) return;
-    if (tokenObj.isHidden || tokenObj.faction === 'enemy') return;
-    const tknSize = tokenObj.size || gridSize;
-    const cx = (customX !== undefined ? customX : tokenObj.x) + tknSize / 2;
-    const cy = (customY !== undefined ? customY : tokenObj.y) + tknSize / 2;
-    const rot = customRotation !== undefined ? customRotation : (tokenObj.rotation || 0);
-    const vMode = customVisionMode !== undefined ? customVisionMode : (tokenObj.visionMode || 'cone');
-
-    if (!Number.isFinite(cx) || !Number.isFinite(cy) || !Number.isFinite(rot)) return;
-
-    const now = performance.now();
-    const prev = lastFowTrailRef.current[tokenObj.id];
-    if (!force && prev) {
-      const dist = Math.hypot(cx - prev.x, cy - prev.y);
-      const rotDiff = Math.abs((((rot - prev.angle) % 360) + 540) % 360 - 180);
-      const elapsed = now - (prev.time || 0);
-      if ((dist < 22 && rotDiff < 12 && prev.visionMode === vMode) || elapsed < 65) {
-        return;
-      }
-    }
-
-    lastFowTrailRef.current[tokenObj.id] = { x: cx, y: cy, angle: rot, visionMode: vMode, time: now };
-
-    setFowActions(prevActions => {
-      const next = [...prevActions, {
-        x: Math.round(cx),
-        y: Math.round(cy),
-        radius: fowVisionRadius,
-        tokenSize: tknSize,
-        type: 'reveal',
-        mode: 'token',
-        visionMode: vMode,
-        angle: Math.round(rot * 10) / 10,
-        fov: vMode === 'cone' ? 90 : 360
-      }];
-      return next.length > 600 ? next.slice(next.length - 600) : next;
-    });
-  };
-
   const handlePointerDown = (e) => {
-    if (!boardRef.current) return;
-    const rect = boardRef.current.getBoundingClientRect();
-    const logicalX = (e.clientX - rect.left - pan.x) / scale;
-    const logicalY = (e.clientY - rect.top - pan.y) / scale;
-
-    if ((e.button === 0 && (pingActive || e.shiftKey)) || e.button === 1) {
-      spawnPing(logicalX, logicalY);
-      return;
+    if (radialMenu) {
+      setRadialMenu(null);
     }
 
-    if (e.button === 0 && (rulerActive || e.altKey)) {
-      const newMeasure = { startX: logicalX, startY: logicalY, endX: logicalX, endY: logicalY };
-      setRulerMeasure(newMeasure);
-      if (isPlayerView && syncChannelRef.current) {
-        syncChannelRef.current.postMessage({ type: 'SYNC_RULER', payload: newMeasure });
-      }
-      return;
-    }
-
-    if (!isPlayerView && fowEnabled && fowMode !== 'none' && e.button === 0) {
-      lastBrushPosRef.current = { x: logicalX, y: logicalY };
-      setFowActions(prev => [...prev, { x: logicalX, y: logicalY, radius: fowBrushSize, type: fowMode, mode: 'brush' }]);
-      return;
-    }
-
-    if (e.button === 0 || e.button === 2) {
+    if (e.button === 1 || e.button === 2) {
+      clearHoldTimer();
       setIsDraggingPan(true);
-      panStartRef.current = { x: e.clientX - pan.x, y: e.clientY - pan.y };
+      return;
     }
 
-    if (e.button === 0) {
-      downPosRef.current = { x: e.clientX, y: e.clientY };
-      if (pingTimerRef.current) clearTimeout(pingTimerRef.current);
-      pingTimerRef.current = setTimeout(() => {
-        setIsDraggingPan(false);
-        spawnPing(logicalX, logicalY);
-      }, 500);
+    const coords = getLogicalCoords(e);
+
+    if (pingActive && !isPlayerView) {
+      emitSpatialPing(coords.x, coords.y, null);
+      return;
     }
+
+    if (rulerActive) {
+      setRulerMeasure({ startX: coords.x, startY: coords.y, endX: coords.x, endY: coords.y });
+      return;
+    }
+
+    if (!isPlayerView && fowEnabled && fowMode !== 'none') {
+      setIsPaintingFow(true);
+      setFowActions(prev => [...prev, { x: coords.x, y: coords.y, size: fowBrushSize, mode: fowMode }]);
+      return;
+    }
+
+    if (!isPlayerView && e.button === 0) {
+      clearHoldTimer();
+      holdStartPosRef.current = { clientX: e.clientX, clientY: e.clientY, logicalX: coords.x, logicalY: coords.y };
+      setHoldProgress({ x: coords.x, y: coords.y });
+      holdTimerRef.current = setTimeout(() => {
+        setIsDraggingPan(false);
+        setHoldProgress(null);
+        setRadialMenu({
+          screenX: e.clientX,
+          screenY: e.clientY,
+          logicalX: coords.x,
+          logicalY: coords.y
+        });
+      }, 550);
+    }
+
+    setIsDraggingPan(true);
   };
 
   const handlePointerMove = (e) => {
-    if (!boardRef.current) return;
-    const rect = boardRef.current.getBoundingClientRect();
-    const logicalX = (e.clientX - rect.left - pan.x) / scale;
-    const logicalY = (e.clientY - rect.top - pan.y) / scale;
+    const coords = getLogicalCoords(e);
 
-    if (pingTimerRef.current && downPosRef.current) {
-      const moveDist = Math.hypot(e.clientX - downPosRef.current.x, e.clientY - downPosRef.current.y);
-      if (moveDist > 6) {
-        clearTimeout(pingTimerRef.current);
-        pingTimerRef.current = null;
+    if (holdStartPosRef.current) {
+      const distMoved = Math.hypot(
+        e.clientX - holdStartPosRef.current.clientX,
+        e.clientY - holdStartPosRef.current.clientY
+      );
+      if (distMoved > 8) {
+        clearHoldTimer();
+        holdStartPosRef.current = null;
       }
-    }
-
-    if (!isPlayerView && rotatingToken !== null) {
-      const currentToken = tokens.find(t => t.id === rotatingToken);
-      if (!currentToken) return;
-      const tknSize = currentToken.size || gridSize;
-      const centerX = currentToken.x + tknSize / 2;
-      const centerY = currentToken.y + tknSize / 2;
-      const dx = logicalX - centerX;
-      const dy = logicalY - centerY;
-
-      if (Math.hypot(dx, dy) > 2) {
-        const targetAngle = (((Math.atan2(dy, dx) * 180) / Math.PI) % 360 + 360) % 360;
-        const smoothRot = lerpAngle(currentToken.rotation || 0, targetAngle, 0.55);
-        setTokens(prev => prev.map(t => t.id === rotatingToken ? { ...t, rotation: smoothRot } : t));
-        if (fowEnabled) {
-          revealTokenVision(currentToken, currentToken.x, currentToken.y, smoothRot, currentToken.visionMode || 'cone', false);
-        }
-      }
-      return;
-    }
-
-    if (isDraggingPan && draggedToken === null && rotatingToken === null) {
-      setPan({
-        x: e.clientX - panStartRef.current.x,
-        y: e.clientY - panStartRef.current.y
-      });
-      return;
     }
 
     if (rulerMeasure) {
-      const updatedMeasure = { ...rulerMeasure, endX: logicalX, endY: logicalY };
-      setRulerMeasure(updatedMeasure);
-      if (isPlayerView && syncChannelRef.current) {
-        syncChannelRef.current.postMessage({ type: 'SYNC_RULER', payload: updatedMeasure });
-      }
+      setRulerMeasure(prev => ({ ...prev, endX: coords.x, endY: coords.y }));
       return;
     }
 
-    if (isPlayerView) return;
-
-    if (fowEnabled && fowMode !== 'none' && e.buttons === 1) {
-      const lastPos = lastBrushPosRef.current;
-      if (!lastPos || Math.hypot(logicalX - lastPos.x, logicalY - lastPos.y) >= Math.max(10, fowBrushSize * 0.22)) {
-        lastBrushPosRef.current = { x: logicalX, y: logicalY };
-        setFowActions(prev => [...prev, { x: logicalX, y: logicalY, radius: fowBrushSize, type: fowMode, mode: 'brush' }]);
-      }
+    if (isPaintingFow && !isPlayerView && fowEnabled && fowMode !== 'none') {
+      setFowActions(prev => [...prev, { x: coords.x, y: coords.y, size: fowBrushSize, mode: fowMode }]);
       return;
     }
 
-    // Mover un token respetando paredes, puertas cerradas y ventanas cerradas
-    if (draggedToken !== null) {
-      const currentToken = tokens.find(t => t.id === draggedToken);
-      if (!currentToken) return;
-
-      const tknSize = currentToken.size || gridSize;
-      const targetX = logicalX - dragOffset.x;
-      const targetY = logicalY - dragOffset.y;
-
-      if (isMovementBlocked(currentToken.x, currentToken.y, targetX, targetY, tknSize)) {
-        return;
-      }
-
-      // Orientación progresiva y suave usando un punto de anclaje dinámico (sin tirones bruscos por píxel)
-      const anchor = walkAnchorRef.current[draggedToken] || { x: currentToken.x, y: currentToken.y };
-      const dx = targetX - anchor.x;
-      const dy = targetY - anchor.y;
-      const distFromAnchor = Math.hypot(dx, dy);
-      let newRotation = currentToken.rotation || 0;
-
-      if (distFromAnchor > 5) {
-        const targetAngle = (((Math.atan2(dy, dx) * 180) / Math.PI) % 360 + 360) % 360;
-        newRotation = lerpAngle(newRotation, targetAngle, 0.28);
-        walkAnchorRef.current[draggedToken] = {
-          x: anchor.x + dx * 0.3,
-          y: anchor.y + dy * 0.3
-        };
-      }
-
+    if (rotatingToken) {
       setTokens(prev => prev.map(t => {
-        if (t.id === draggedToken) {
-          return { ...t, x: targetX, y: targetY, rotation: newRotation };
+        if (t.id !== rotatingToken) return t;
+        const size = t.size || 50;
+        const cx = t.x + size / 2;
+        const cy = t.y + size / 2;
+        const deg = ((Math.atan2(coords.y - cy, coords.x - cx) * 180) / Math.PI + 360) % 360;
+        return { ...t, rotation: deg };
+      }));
+      return;
+    }
+
+    if (draggedToken) {
+      setTokens(prev => prev.map(t => {
+        if (t.id !== draggedToken) return t;
+        const isImmobilized = (t.statuses || []).some(stId => {
+          const stObj = customStatuses.find(cs => cs.id === stId);
+          return stObj && stObj.effect === 'immobilize';
+        });
+        if (isImmobilized) return t;
+
+        const size = t.size || 50;
+        const currentCenterX = t.x + size / 2;
+        const currentCenterY = t.y + size / 2;
+        const targetCenterX = coords.x;
+        const targetCenterY = coords.y;
+
+        if (!isMovementBlocked(currentCenterX, currentCenterY, targetCenterX, targetCenterY)) {
+          return { ...t, x: targetCenterX - size / 2, y: targetCenterY - size / 2 };
+        }
+        if (!isMovementBlocked(currentCenterX, currentCenterY, targetCenterX, currentCenterY)) {
+          return { ...t, x: targetCenterX - size / 2 };
+        }
+        if (!isMovementBlocked(currentCenterX, currentCenterY, currentCenterX, targetCenterY)) {
+          return { ...t, y: targetCenterY - size / 2 };
         }
         return t;
       }));
+      return;
+    }
 
-      if (fowEnabled) {
-        revealTokenVision(currentToken, targetX, targetY, newRotation, currentToken.visionMode || 'cone', false);
-      }
+    if (isDraggingPan) {
+      setPan(prev => ({ x: prev.x + e.movementX, y: prev.y + e.movementY }));
     }
   };
 
   const handlePointerUp = () => {
-    lastBrushPosRef.current = null;
-    if (isDraggingPan) {
-      setIsDraggingPan(false);
-    }
-    if (pingTimerRef.current) {
-      clearTimeout(pingTimerRef.current);
-      pingTimerRef.current = null;
-    }
-    if (rulerMeasure) {
-      setRulerMeasure(null);
-      if (isPlayerView && syncChannelRef.current) {
-        syncChannelRef.current.postMessage({ type: 'SYNC_RULER', payload: null });
-      }
-    }
-    if (rotatingToken !== null) {
-      const rotTkn = tokens.find(t => t.id === rotatingToken);
-      if (rotTkn && fowEnabled) {
-        revealTokenVision(rotTkn, rotTkn.x, rotTkn.y, rotTkn.rotation || 0, rotTkn.visionMode || 'cone', true);
-      }
-      setRotatingToken(null);
-    }
-    if (draggedToken !== null) {
-      const movedToken = tokens.find(t => t.id === draggedToken);
-      if (movedToken) {
-        if (snapToGrid) {
-          const tknSize = movedToken.size || gridSize;
-          const cellX = Math.floor((movedToken.x + tknSize / 2) / gridSize) * gridSize + (gridSize - tknSize) / 2;
-          const cellY = Math.floor((movedToken.y + tknSize / 2) / gridSize) * gridSize + (gridSize - tknSize) / 2;
-
-          if (!isMovementBlocked(movedToken.x, movedToken.y, cellX, cellY, tknSize)) {
-            setTokens(prev => prev.map(t => t.id === draggedToken ? { ...t, x: cellX, y: cellY } : t));
-            if (fowEnabled) {
-              revealTokenVision(movedToken, cellX, cellY, movedToken.rotation || 0, movedToken.visionMode || 'cone', true);
-            }
-          }
-        } else if (fowEnabled) {
-          revealTokenVision(movedToken, movedToken.x, movedToken.y, movedToken.rotation || 0, movedToken.visionMode || 'cone', true);
+    clearHoldTimer();
+    holdStartPosRef.current = null;
+    if (draggedToken && snapToGrid) {
+      setTokens(prev => prev.map(t => {
+        if (t.id !== draggedToken) return t;
+        const size = t.size || 50;
+        const snappedX = Math.round(t.x / gridSize) * gridSize;
+        const snappedY = Math.round(t.y / gridSize) * gridSize;
+        if (!isMovementBlocked(t.x + size / 2, t.y + size / 2, snappedX + size / 2, snappedY + size / 2)) {
+          return { ...t, x: snappedX, y: snappedY };
         }
-      }
-      setDraggedToken(null);
+        return t;
+      }));
     }
+    setDraggedToken(null);
+    setRotatingToken(null);
+    setIsDraggingPan(false);
+    setIsPaintingFow(false);
+    setRulerMeasure(null);
   };
-
-  // Garantiza que soltar el ratón fuera del tablero o sobre un menú flotante siempre limpie el estado de arrastre
-  useEffect(() => {
-    const onGlobalUp = () => {
-      if (isDraggingPan || draggedToken !== null || rotatingToken !== null) {
-        handlePointerUp();
-      }
-    };
-    window.addEventListener('pointerup', onGlobalUp);
-    window.addEventListener('pointercancel', onGlobalUp);
-    return () => {
-      window.removeEventListener('pointerup', onGlobalUp);
-      window.removeEventListener('pointercancel', onGlobalUp);
-    };
-  });
 
   const handleWheel = (e) => {
     const zoomFactor = -e.deltaY * 0.001;
-    setScale(prev => Math.min(Math.max(0.1, prev + zoomFactor), 5));
+    setScale(prev => Math.min(Math.max(0.2, prev + zoomFactor), 4));
   };
 
   const handleTokenPointerDown = (e, token) => {
     if (isPlayerView) return;
-    if (token.isLocked) return;
-
-    e.preventDefault();
-    e.stopPropagation();
-    if (window.getSelection) {
-      window.getSelection().removeAllRanges();
-    }
-
-    // Shift + arrastrar sobre la ficha permite girar el cono directamente hacia el ratón sin desplazar la ficha
+    clearHoldTimer();
+    holdStartPosRef.current = null;
     if (e.shiftKey) {
       setRotatingToken(token.id);
-      return;
+    } else {
+      setDraggedToken(token.id);
     }
-
-    const hasImmobilize = token.statuses?.some(stId => {
-      const statusObj = customStatuses.find(s => s.id === stId);
-      return statusObj && statusObj.effect === 'immobilize';
-    });
-    if (hasImmobilize) return;
-
-    const rect = boardRef.current.getBoundingClientRect();
-    const mouseX = (e.clientX - rect.left - pan.x) / scale;
-    const mouseY = (e.clientY - rect.top - pan.y) / scale;
-    
-    walkAnchorRef.current[token.id] = { x: token.x, y: token.y };
-    setDraggedToken(token.id);
-    setDragOffset({ x: mouseX - token.x, y: mouseY - token.y });
   };
 
   const handleStartTokenRotate = (e, token) => {
-    if (isPlayerView || token.isLocked) return;
-    e.preventDefault();
-    e.stopPropagation();
+    if (isPlayerView) return;
     setRotatingToken(token.id);
   };
 
-  const handleUpdateTokenRotation = (tokenId, newAngle) => {
-    if (!Number.isFinite(newAngle)) return;
-    const normalized = ((newAngle % 360) + 360) % 360;
-    const targetToken = tokens.find(t => t.id === tokenId);
-    setTokens(prev => prev.map(t => t.id === tokenId ? { ...t, rotation: normalized } : t));
-    if (targetToken && fowEnabled) {
-      revealTokenVision(targetToken, targetToken.x, targetToken.y, normalized, targetToken.visionMode || 'cone', false);
-    }
-  };
-
-  const handleUpdateTokenVisionMode = (tokenId, newVisionMode) => {
-    const targetToken = tokens.find(t => t.id === tokenId);
-    setTokens(prev => prev.map(t => t.id === tokenId ? { ...t, visionMode: newVisionMode } : t));
-    if (targetToken && fowEnabled) {
-      revealTokenVision(targetToken, targetToken.x, targetToken.y, targetToken.rotation || 0, newVisionMode, true);
-    }
-  };
-
-  const handleAddTokenToBoard = (char) => {
-    const rect = boardRef.current ? boardRef.current.getBoundingClientRect() : { width: window.innerWidth, height: window.innerHeight };
-    const rawCenterX = (rect.width / 2 - pan.x) / scale - gridSize / 2;
-    const rawCenterY = (rect.height / 2 - pan.y) / scale - gridSize / 2;
-
-    const spawnX = snapToGrid ? Math.round(rawCenterX / gridSize) * gridSize : rawCenterX;
-    const spawnY = snapToGrid ? Math.round(rawCenterY / gridSize) * gridSize : rawCenterY;
-
+  const handleAddToken = (char) => {
+    const center = {
+      x: Math.round((-pan.x / scale + window.innerWidth / 3 / scale) / gridSize) * gridSize,
+      y: Math.round((-pan.y / scale + window.innerHeight / 2 / scale) / gridSize) * gridSize
+    };
     const newToken = {
-      ...char,
-      id: `token_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-      x: spawnX,
-      y: spawnY,
+      id: Date.now() + Math.random(),
+      name: char.name,
+      color: char.color,
+      avatar: char.avatar || null,
+      faction: char.faction || 'ally',
+      x: center.x,
+      y: center.y,
       size: gridSize,
       rotation: 0,
       visionMode: 'cone',
-      faction: char.faction || 'ally',
-      isHidden: char.faction === 'enemy',
       isLocked: false,
+      isHidden: char.faction === 'enemy',
       showName: true,
       statuses: []
     };
-    setTokens([...tokens, newToken]);
-    if (fowEnabled && newToken.faction !== 'enemy' && !newToken.isHidden) {
-      revealTokenVision(newToken, spawnX, spawnY, 0, 'cone');
+    setTokens(prev => [...prev, newToken]);
+    showMasterFeedback(`${char.name} invocado en escena`, '⚔️');
+  };
+
+  const handleToggleDoor = (doorId) => {
+    setMaps(prev => prev.map(el => {
+      if (el.id !== doorId) return el;
+      const nextOpen = !el.isOpen;
+      postSyncMessage({
+        type: 'SOUND_PLAY',
+        payload: { id: nextOpen ? 'sfx_door_open' : 'sfx_door_slam' }
+      });
+      showMasterFeedback(nextOpen ? 'Puerta Abierta' : 'Puerta Cerrada', nextOpen ? '🔓' : '🚪');
+      return { ...el, isOpen: nextOpen };
+    }));
+  };
+
+  const handleToggleWindow = (winId, breakGlass = false) => {
+    setMaps(prev => prev.map(el => {
+      if (el.id !== winId) return el;
+      const nextOpen = breakGlass ? true : !el.isOpen;
+      if (breakGlass) {
+        postSyncMessage({
+          type: 'SOUND_PLAY',
+          payload: { id: 'sfx_glass' }
+        });
+      }
+      showMasterFeedback(breakGlass ? '¡Cristal Roto!' : (nextOpen ? 'Ventana Abierta' : 'Ventana Cerrada'), '🪟');
+      return { ...el, isOpen: nextOpen, isBroken: breakGlass || el.isBroken };
+    }));
+  };
+
+  const handleToggleObject = (objId) => {
+    setMaps(prev => prev.map(el => {
+      if (el.id !== objId) return el;
+      const nextOpen = !el.isOpen;
+      postSyncMessage({
+        type: 'SOUND_PLAY',
+        payload: { id: 'sfx_chest' }
+      });
+      showMasterFeedback(`${el.name || 'Objeto'}: ${nextOpen ? 'Activado / Abierto' : 'Cerrado'}`, nextOpen ? (el.openIcon || '🪙') : (el.icon || '📦'));
+      return { ...el, isOpen: nextOpen };
+    }));
+  };
+
+  const handleToggleLight = (lightId) => {
+    setMaps(prev => prev.map(el => {
+      if (el.id !== lightId) return el;
+      const nextOn = el.isOn === false ? true : false;
+      showMasterFeedback(`${el.name || 'Fuente de Luz'}: ${nextOn ? 'Encendida' : 'Apagada'}`, nextOn ? '🔥' : '🌑');
+      return { ...el, isOn: nextOn };
+    }));
+  };
+
+  const handleTriggerSound = (sound) => {
+    if (sound.loop) {
+      setActiveLoops(prev =>
+        prev.includes(sound.id) ? prev.filter(id => id !== sound.id) : [...prev, sound.id]
+      );
     }
+    postSyncMessage({ type: 'SOUND_PLAY', payload: sound });
+    showMasterFeedback(sound.label, sound.icon);
   };
 
-  const handleToggleTokenHidden = (tokenId) => {
-    setTokens(prev => prev.map(t => t.id === tokenId ? { ...t, isHidden: !t.isHidden } : t));
+  const handleStopAllSounds = () => {
+    setActiveLoops([]);
+    postSyncMessage({ type: 'SOUND_STOP_ALL' });
+    showMasterFeedback('Ecos silenciados', '🔇');
   };
 
-  const handleToggleTokenFaction = (tokenId) => {
-    setTokens(prev => prev.map(t => {
-      if (t.id === tokenId) {
-        const nextFaction = t.faction === 'enemy' ? 'ally' : 'enemy';
-        return { ...t, faction: nextFaction };
+  const handleExportCampaign = () => {
+    exportCampaignJSON({
+      characters, tokens, maps, scenes, activeSceneId, handouts,
+      customStatuses, customSounds, fowEnabled, fowVisionRadius,
+      fowMemoryEnabled, fowAutoHideEnemies, fowActions,
+      weatherEffect, ambientTint, snapToGrid, gridSize
+    });
+    showMasterFeedback('Crónica exportada (.json)', '📤');
+  };
+
+  const handleOpenPlayerView = async () => {
+    const playerUrl = `${window.location.origin}${window.location.pathname}?view=player`;
+
+    if (isTauriDesktop()) {
+      try {
+        const existingWin = await WebviewWindow.getByLabel('player');
+        if (existingWin) {
+          await existingWin.show();
+          await existingWin.setFocus();
+          showMasterFeedback('Pantalla de Jugadores enfocada');
+          return;
+        }
+
+        const webview = new WebviewWindow('player', {
+          url: '/?view=player',
+          title: 'Grimorio VTT — Pantalla de Jugadores (Alpha)',
+          width: 1280,
+          height: 720,
+          resizable: true,
+          fullscreen: false
+        });
+
+        webview.once('tauri://created', () => {
+          showMasterFeedback('Pantalla de Jugadores abierta');
+          setTimeout(() => {
+            postSyncMessage({
+              type: 'STATE_SYNC',
+              payload: {
+                tokens, maps, customStatuses, fowEnabled, fowVisionRadius,
+                fowMemoryEnabled, fowAutoHideEnemies, fowActions,
+                weatherEffect, ambientTint, snapToGrid, gridSize, pan, scale, syncPlayerCamera, activeHandout
+              }
+            });
+          }, 500);
+        });
+
+        webview.once('tauri://error', (e) => {
+          console.error('Error abriendo ventana Tauri:', e);
+          showMasterFeedback('Error de permiso en ventana Tauri', '⚠️');
+        });
+        return;
+      } catch (err) {
+        console.error('Excepción en Tauri WebviewWindow:', err);
       }
-      return t;
-    }));
+    }
+
+    window.open(playerUrl, '_blank', 'width=1280,height=720');
   };
 
-  const handleToggleTokenName = (tokenId) => {
-    setTokens(tokens.map(t => t.id === tokenId ? { ...t, showName: t.showName === false ? true : false } : t));
-  };
-
-  const handleToggleTokenStatus = (tokenId, statusId) => {
-    setTokens(tokens.map(t => {
-      if (t.id === tokenId) {
-        const currentStatuses = t.statuses || [];
-        const newStatuses = currentStatuses.includes(statusId)
-          ? currentStatuses.filter(s => s !== statusId)
-          : [...currentStatuses, statusId];
-        return { ...t, statuses: newStatuses };
-      }
-      return t;
-    }));
-  };
-
-  const handleImportCampaign = (e) => {
+  const handleImportCampaignFile = (e) => {
     const file = e.target.files[0];
     if (!file) return;
     const reader = new FileReader();
     reader.onload = (evt) => {
       try {
         const data = JSON.parse(evt.target.result);
-        if (data.maps) setMaps(data.maps);
-        if (data.tokens) setTokens(data.tokens);
-        if (data.fowActions) setFowActions(data.fowActions);
-        if (data.customStatuses) setCustomStatuses(data.customStatuses);
         if (data.characters) setCharacters(data.characters);
-        setIsSettingsModalOpen(false);
-      } catch (err) {}
+        if (data.tokens) setTokens(data.tokens);
+        if (data.maps) {
+          setMaps(data.maps);
+          saveCampaignToDB(data, true);
+        }
+        if (Array.isArray(data.scenes) && data.scenes.length > 0) {
+          setScenes(data.scenes);
+          if (data.activeSceneId) setActiveSceneId(data.activeSceneId);
+        }
+        if (Array.isArray(data.handouts)) setHandouts(data.handouts);
+        if (data.customStatuses) setCustomStatuses(data.customStatuses);
+        if (data.customSounds) setCustomSounds(data.customSounds);
+        if (typeof data.fowEnabled === 'boolean') setFowEnabled(data.fowEnabled);
+        if (data.fowVisionRadius) setFowVisionRadius(data.fowVisionRadius);
+        if (data.fowActions) setFowActions(data.fowActions);
+        showMasterFeedback('¡Crónica restaurada con éxito!');
+      } catch (err) {
+        showMasterFeedback('El archivo seleccionado no es una crónica válida');
+      }
       e.target.value = '';
     };
     reader.readAsText(file);
   };
 
-  return (
-    <div style={{
-      position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
-      display: 'flex',
-      backgroundColor: '#0d0907',
-      color: '#e6d5b8',
-      fontFamily: "'Crimson Text', 'EB Garamond', Georgia, serif",
-      overflow: 'hidden'
-    }}>
-      {/* Tipografías y Estilos Globales Gótico / Barroco */}
-      <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700;900&family=Crimson+Text:ital,wght@0,400;0,600;0,700;1,400&display=swap');
-
-        .vtt-gothic-title {
-          font-family: 'Cinzel', Georgia, serif;
-          letter-spacing: 0.06em;
-          text-shadow: 0 2px 4px rgba(0, 0, 0, 0.85);
-        }
-
-        .vtt-wood-panel {
-          background: linear-gradient(180deg, #241711 0%, #160e0a 100%);
-          border: 1px solid #6b4c2b;
-          box-shadow: inset 0 1px 0 rgba(212, 175, 55, 0.2), 0 10px 30px rgba(0, 0, 0, 0.85);
-        }
-
-        .vtt-brass-btn {
-          font-family: 'Cinzel', Georgia, serif;
-          background: linear-gradient(180deg, #3a2618 0%, #21150d 100%);
-          color: #e6d5b8;
-          border: 1px solid #8a6d3b;
-          box-shadow: inset 0 1px 0 rgba(255, 215, 128, 0.2), 0 3px 6px rgba(0, 0, 0, 0.6);
-          transition: all 0.2s ease;
-        }
-        .vtt-brass-btn:hover {
-          border-color: #d4af37;
-          color: #fff3d1;
-          box-shadow: inset 0 1px 0 rgba(255, 215, 128, 0.4), 0 0 10px rgba(212, 175, 55, 0.3);
-        }
-      `}</style>
-      
-      {!isPlayerView && (
-        <TokenSidebar 
-          tokens={tokens} characters={characters}
-          onAddToken={handleAddTokenToBoard}
-          onRemoveToken={(id) => setTokens(tokens.filter(t => t.id !== id))}
-          onRemoveCharacter={(id) => setCharacters(characters.filter(c => c.id !== id))}
-          onToggleTokenName={handleToggleTokenName}
-          onToggleTokenHidden={handleToggleTokenHidden}
-          onToggleTokenFaction={handleToggleTokenFaction}
+  if (isPlayerView) {
+    return (
+      <div style={{ position: 'fixed', inset: 0, width: '100%', height: '100%', display: 'flex', overflow: 'hidden', backgroundColor: '#050302' }}>
+        <style>{GLOBAL_VTT_STYLES}</style>
+        <GameBoard
+          boardRef={boardRef}
+          scale={scale}
+          pan={pan}
+          isPlayerView={true}
+          fowEnabled={fowEnabled}
+          fowVisionRadius={fowVisionRadius}
+          fowMemoryEnabled={fowMemoryEnabled}
+          fowAutoHideEnemies={fowAutoHideEnemies}
+          weatherEffect={weatherEffect}
+          ambientTint={ambientTint}
+          handlePointerDown={handlePointerDown}
+          handlePointerMove={handlePointerMove}
+          handlePointerUp={handlePointerUp}
+          handleWheel={handleWheel}
+          snapToGrid={snapToGrid}
+          gridSize={gridSize}
+          maps={maps}
+          fowCanvasRef={fowCanvasRef}
+          fowActions={fowActions}
+          tokens={tokens}
           customStatuses={customStatuses}
+          pings={pings}
         />
+        <HandoutFullscreenOverlay handout={activeHandout} isPlayerView={true} />
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, width: '100%', height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden', backgroundColor: '#0e0906' }}>
+      <style>{GLOBAL_VTT_STYLES}</style>
+      <input
+        type="file"
+        accept=".json"
+        ref={campaignFileInputRef}
+        onChange={handleImportCampaignFile}
+        style={{ display: 'none' }}
+      />
+
+      {/* Barra Superior Gótica */}
+      <div style={{
+        height: '58px',
+        background: 'linear-gradient(180deg, #2b1b12 0%, #160e09 100%)',
+        borderBottom: '2px solid #8a6d3b',
+        padding: '0 22px',
+        display: 'flex',
+        alignItems: 'center',
+        zIndex: 30,
+        boxShadow: '0 4px 20px rgba(0,0,0,0.85)'
+      }}>
+        <Toolbar
+          onResetBoard={() => {
+            setTokens([]);
+            setFowActions([]);
+            showMasterFeedback('Mesa despejada', '🗡️');
+          }}
+          onOpenMapCreator={() => setIsMapCreatorOpen(true)}
+          onOpenSettings={() => setIsSettingsOpen(!isSettingsOpen)}
+          onOpenPlayerView={handleOpenPlayerView}
+          scenes={scenes}
+          activeSceneId={activeSceneId}
+          onSelectScene={handleSelectScene}
+          onCreateNewScene={handleCreateNewScene}
+        />
+      </div>
+
+      {/* Modal a Pantalla Completa del Creador de Mapas */}
+      {isMapCreatorOpen && !isPlayerView && (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 99999, backgroundColor: '#080504', display: 'flex', flexDirection: 'column' }}>
+          <MapCreator
+            initialElements={maps}
+            onLoadMapToBoard={(newElements) => {
+              setMaps(newElements);
+              saveCampaignToDB({ maps: newElements }, true);
+              showMasterFeedback('Escenario actualizado');
+            }}
+            onClose={() => setIsMapCreatorOpen(false)}
+            onReturnToSettings={() => {
+              setIsMapCreatorOpen(false);
+              setIsSettingsOpen(true);
+            }}
+          />
+        </div>
       )}
 
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', position: 'relative' }}>
-        {!isPlayerView && (
-          <div style={{
-            padding: '10px 22px',
-            background: 'linear-gradient(180deg, #2b1b12 0%, #170f0a 100%)',
-            borderBottom: '2px solid #8a6d3b',
-            boxShadow: '0 4px 18px rgba(0,0,0,0.85), inset 0 -1px 0 rgba(212,175,55,0.25)',
-            display: 'flex',
-            alignItems: 'center',
-            zIndex: 10
-          }}>
-            <Toolbar 
-              onResetBoard={() => { setMaps([]); setTokens([]); setFowActions([]); }}
-              onOpenSettings={() => setIsSettingsModalOpen(true)}
-              onOpenPlayerView={handleOpenPlayerView}
-            />
+      {/* Cuerpo Central */}
+      <div style={{ display: 'flex', flex: 1, overflow: 'hidden', position: 'relative' }}>
+        {/* Aviso Flotante cuando hay una Ilustración o Pergamino Proyectándose en la Pantalla de Jugadores */}
+        {activeHandout && (
+          <div
+            onPointerDown={(e) => e.stopPropagation()}
+            style={{
+              position: 'fixed',
+              top: '72px',
+              left: 'calc(50% + 145px)',
+              transform: 'translateX(-50%)',
+              zIndex: 4300,
+              background: 'linear-gradient(180deg, rgba(20, 83, 45, 0.96) 0%, rgba(5, 46, 22, 0.98) 100%)',
+              border: '2px solid #4ade80',
+              borderRadius: '8px',
+              padding: '8px 16px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '14px',
+              color: '#dcfce7',
+              fontSize: '12px',
+              boxShadow: '0 8px 25px rgba(0,0,0,0.9)'
+            }}
+          >
+            <span>
+              <strong>Proyectando en Pantalla de Jugadores:</strong> {activeHandout.title}
+            </span>
+            <button
+              onClick={() => {
+                setActiveHandout(null);
+                showMasterFeedback('Proyección retirada');
+              }}
+              className="vtt-brass-btn"
+              style={{
+                padding: '4px 12px',
+                borderRadius: '4px',
+                fontSize: '11px',
+                fontWeight: 'bold',
+                cursor: 'pointer',
+                borderColor: '#f87171',
+                color: '#fecaca'
+              }}
+            >
+              Retirar Proyección (Esc)
+            </button>
           </div>
         )}
 
-        <GameBoard 
+        {/* Aviso Flotante Superior cuando hay una Herramienta o Pincel activo */}
+        {(fowMode !== 'none' || rulerActive || pingActive) && !activeHandout && (
+          <div
+            onPointerDown={(e) => e.stopPropagation()}
+            style={{
+              position: 'fixed',
+              top: '72px',
+              left: 'calc(50% + 145px)',
+              transform: 'translateX(-50%)',
+              zIndex: 4200,
+              background: 'linear-gradient(180deg, rgba(146, 64, 14, 0.96) 0%, rgba(69, 26, 3, 0.98) 100%)',
+              border: '1px solid #fbbf24',
+              borderRadius: '8px',
+              padding: '6px 14px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '12px',
+              color: '#fffbeb',
+              fontSize: '12px',
+              boxShadow: '0 8px 20px rgba(0,0,0,0.85)'
+            }}
+          >
+            <span>
+              <strong>Modo Activo:</strong>{' '}
+              {rulerActive
+                ? 'Regla de Medición (Arrastra en el mapa)'
+                : pingActive
+                ? 'Señal / Ping (Haz clic en el mapa)'
+                : fowMode === 'reveal'
+                ? 'Pincel de Niebla: Revelar Zona'
+                : 'Pincel de Niebla: Tapar Zona'}
+            </span>
+            <button
+              onClick={() => {
+                setFowMode('none');
+                setRulerActive(false);
+                setPingActive(false);
+              }}
+              className="vtt-brass-btn"
+              style={{
+                padding: '3px 10px',
+                borderRadius: '4px',
+                fontSize: '11px',
+                fontWeight: 'bold',
+                cursor: 'pointer',
+                borderColor: '#fbbf24'
+              }}
+            >
+              Volver a Mover Fichas (Esc)
+            </button>
+          </div>
+        )}
+
+        <TokenSidebar
+          tokens={tokens}
+          characters={characters}
+          onAddToken={handleAddToken}
+          onRemoveToken={(id) => setTokens(prev => prev.filter(t => t.id !== id))}
+          onRemoveCharacter={(id) => setCharacters(prev => prev.filter(c => c.id !== id))}
+          onToggleTokenName={(id) => setTokens(prev => prev.map(t => {
+            if (t.id !== id) return t;
+            const next = t.showName === false ? true : false;
+            showMasterFeedback(`${t.name}: ${next ? 'Nombre Visible' : 'Nombre Oculto'}`, '🏷️');
+            return { ...t, showName: next };
+          }))}
+          onToggleTokenHidden={(id) => setTokens(prev => prev.map(t => {
+            if (t.id !== id) return t;
+            const next = !t.isHidden;
+            showMasterFeedback(`${t.name}: ${next ? 'En Sigilo (👻)' : 'Revelado'}`, next ? '👻' : '👁️');
+            return { ...t, isHidden: next };
+          }))}
+          onToggleTokenFaction={(id) => setTokens(prev => prev.map(t => {
+            if (t.id !== id) return t;
+            const next = t.faction === 'enemy' ? 'ally' : 'enemy';
+            showMasterFeedback(`${t.name}: ${next === 'enemy' ? 'Enemigo (💀)' : 'Aliado (🛡️)'}`, next === 'enemy' ? '💀' : '🛡️');
+            return { ...t, faction: next };
+          }))}
+          customStatuses={customStatuses}
+        />
+
+        <GameBoard
           boardRef={boardRef}
           scale={scale}
           pan={pan}
           isDraggingPan={isDraggingPan}
-          isPlayerView={isPlayerView}
+          isPlayerView={false}
           fowEnabled={fowEnabled}
           fowMode={fowMode}
           fowVisionRadius={fowVisionRadius}
@@ -842,313 +1150,279 @@ const App = () => {
           ambientTint={ambientTint}
           rulerActive={rulerActive}
           pingActive={pingActive}
-          handlePointerDown={handlePointerDown} handlePointerMove={handlePointerMove}
-          handlePointerUp={handlePointerUp} handleWheel={handleWheel}
-          snapToGrid={snapToGrid} gridSize={gridSize} maps={maps}
-          fowCanvasRef={fowCanvasRef} fowActions={fowActions}
-          tokens={tokens} draggedToken={draggedToken} rotatingToken={rotatingToken}
+          handlePointerDown={handlePointerDown}
+          handlePointerMove={handlePointerMove}
+          handlePointerUp={handlePointerUp}
+          handleWheel={handleWheel}
+          snapToGrid={snapToGrid}
+          gridSize={gridSize}
+          maps={maps}
+          fowCanvasRef={fowCanvasRef}
+          fowActions={fowActions}
+          tokens={tokens}
+          draggedToken={draggedToken}
+          rotatingToken={rotatingToken}
           onTokenPointerDown={handleTokenPointerDown}
           onStartTokenRotate={handleStartTokenRotate}
-          onToggleTokenLock={(tokenId) => setTokens(tokens.map(t => t.id === tokenId ? { ...t, isLocked: !t.isLocked } : t))}
-          onToggleTokenHidden={handleToggleTokenHidden}
-          onToggleTokenFaction={handleToggleTokenFaction}
-          onUpdateTokenSize={(tokenId, newSize) => setTokens(tokens.map(t => t.id === tokenId ? { ...t, size: newSize } : t))}
-          onUpdateTokenRotation={handleUpdateTokenRotation}
-          onUpdateTokenVisionMode={handleUpdateTokenVisionMode}
-          onToggleTokenStatus={handleToggleTokenStatus}
+          onToggleTokenLock={(id) => setTokens(prev => prev.map(t => {
+            if (t.id !== id) return t;
+            const next = !t.isLocked;
+            showMasterFeedback(`${t.name}: ${next ? 'Posición Bloqueada 🔒' : 'Posición Desbloqueada 🔓'}`, next ? '🔒' : '🔓');
+            return { ...t, isLocked: next };
+          }))}
+          onToggleTokenName={(id) => setTokens(prev => prev.map(t => {
+            if (t.id !== id) return t;
+            const next = t.showName === false ? true : false;
+            showMasterFeedback(`${t.name}: ${next ? 'Nombre Visible' : 'Nombre Oculto'}`, '🏷️');
+            return { ...t, showName: next };
+          }))}
+          onToggleTokenHidden={(id) => setTokens(prev => prev.map(t => t.id === id ? { ...t, isHidden: !t.isHidden } : t))}
+          onToggleTokenFaction={(id) => setTokens(prev => prev.map(t => t.id === id ? { ...t, faction: t.faction === 'enemy' ? 'ally' : 'enemy' } : t))}
+          onUpdateTokenSize={(id, size) => setTokens(prev => prev.map(t => t.id === id ? { ...t, size } : t))}
+          onUpdateTokenRotation={(id, deg) => setTokens(prev => prev.map(t => t.id === id ? { ...t, rotation: ((deg % 360) + 360) % 360 } : t))}
+          onUpdateTokenVisionMode={(id, mode) => setTokens(prev => prev.map(t => t.id === id ? { ...t, visionMode: mode } : t))}
+          onToggleTokenStatus={(id, stId) => setTokens(prev => prev.map(t => {
+            if (t.id !== id) return t;
+            const current = t.statuses || [];
+            const exists = current.includes(stId);
+            return { ...t, statuses: exists ? current.filter(s => s !== stId) : [...current, stId] };
+          }))}
           customStatuses={customStatuses}
           rulerMeasure={rulerMeasure}
           pings={pings}
+          holdProgress={holdProgress}
+          radialMenu={radialMenu}
+          onCloseRadialMenu={() => setRadialMenu(null)}
+          onSelectSpatialSound={(sound) => {
+            if (radialMenu) {
+              emitSpatialPing(radialMenu.logicalX, radialMenu.logicalY, sound);
+              setRadialMenu(null);
+            }
+          }}
+          customSounds={customSounds}
           onToggleDoor={handleToggleDoor}
           onToggleWindow={handleToggleWindow}
+          onToggleObject={handleToggleObject}
+          onToggleLight={handleToggleLight}
+          onProjectHandout={(handoutObj) => {
+            setActiveHandout(handoutObj);
+            if (handoutObj) {
+              showMasterFeedback(`Proyectando a jugadores: ${handoutObj.title}`, '🖼️');
+            } else {
+              showMasterFeedback('Proyección retirada');
+            }
+          }}
         />
 
-        {!isPlayerView && isWeatherMenuOpen && (
-          <div
-            onPointerDown={(e) => e.stopPropagation()}
-            onWheel={(e) => e.stopPropagation()}
-            className="vtt-wood-panel"
-            style={{
-              position: 'fixed',
-              bottom: '74px',
-              left: '50%',
-              transform: 'translateX(-50%)',
-              width: '360px',
-              borderRadius: '10px',
-              border: '2px solid #8a6d3b',
-              padding: '14px',
-              zIndex: 5001,
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '12px',
-              color: '#e6d5b8'
-            }}
-          >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #6b4c2b', paddingBottom: '6px' }}>
-              <span className="vtt-gothic-title" style={{ fontSize: '13px', color: '#d4af37', fontWeight: 'bold' }}>
-                ⛈️ Clima e Iluminación Ambiental
-              </span>
-              <button
-                onClick={() => setIsWeatherMenuOpen(false)}
-                style={{ background: 'transparent', border: 'none', color: '#c5a059', cursor: 'pointer', fontSize: '15px' }}
-              >
-                ✕
-              </button>
-            </div>
-
-            <div>
-              <span className="vtt-gothic-title" style={{ fontSize: '11px', color: '#c5a059', display: 'block', marginBottom: '6px' }}>
-                Partículas en Pantalla
-              </span>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
-                {WEATHER_TYPES.map(w => (
-                  <button
-                    key={w.id}
-                    onClick={() => setWeatherEffect(w.id)}
-                    style={{
-                      padding: '6px 8px',
-                      borderRadius: '6px',
-                      border: weatherEffect === w.id ? '1px solid #fbbf24' : '1px solid #5c4028',
-                      background: weatherEffect === w.id ? 'linear-gradient(180deg, #b45309 0%, #78350f 100%)' : '#120b07',
-                      color: '#f3e5ab',
-                      cursor: 'pointer',
-                      fontSize: '12px',
-                      fontWeight: 'bold',
-                      textAlign: 'left',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '6px'
-                    }}
-                  >
-                    <span>{w.icon}</span>
-                    <span>{w.label}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div>
-              <span className="vtt-gothic-title" style={{ fontSize: '11px', color: '#c5a059', display: 'block', marginBottom: '6px' }}>
-                Tinte de Iluminación
-              </span>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
-                {AMBIENT_TINTS.map(t => (
-                  <button
-                    key={t.id}
-                    onClick={() => setAmbientTint(t.id)}
-                    style={{
-                      padding: '6px 8px',
-                      borderRadius: '6px',
-                      border: ambientTint === t.id ? '1px solid #fbbf24' : '1px solid #5c4028',
-                      background: ambientTint === t.id ? 'linear-gradient(180deg, #b45309 0%, #78350f 100%)' : '#120b07',
-                      color: '#f3e5ab',
-                      cursor: 'pointer',
-                      fontSize: '12px',
-                      fontWeight: 'bold'
-                    }}
-                  >
-                    {t.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Barra flotante Gótica / Barroca de navegación y vista */}
+        {/* Dock Central Flotante de Herramientas */}
         <div
           onPointerDown={(e) => e.stopPropagation()}
-          onWheel={(e) => e.stopPropagation()}
           style={{
             position: 'fixed',
             bottom: '20px',
-            left: '50%',
+            left: 'calc(50% + 145px)',
             transform: 'translateX(-50%)',
-            background: 'linear-gradient(180deg, rgba(43, 27, 18, 0.96) 0%, rgba(22, 14, 9, 0.98) 100%)',
-            border: '2px solid #8a6d3b',
-            outline: '1px solid #120b07',
-            borderRadius: '10px',
-            padding: isHudMinimized ? '6px 16px' : '8px 18px',
+            zIndex: 4000,
             display: 'flex',
+            gap: '12px',
             alignItems: 'center',
-            gap: '10px',
-            boxShadow: '0 12px 30px rgba(0,0,0,0.9), inset 0 1px 0 rgba(212, 175, 55, 0.35)',
-            zIndex: 5000
+            background: 'linear-gradient(180deg, rgba(30, 19, 13, 0.95) 0%, rgba(16, 10, 7, 0.98) 100%)',
+            padding: '10px 20px',
+            borderRadius: '16px',
+            border: '2px solid #8a6d3b',
+            boxShadow: '0 15px 35px rgba(0,0,0,0.9), inset 0 1px 0 rgba(212, 175, 55, 0.25)',
+            backdropFilter: 'blur(8px)'
           }}
         >
-          {!isHudMinimized ? (
-            <>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                <button
-                  onClick={() => setScale(prev => Math.max(0.1, +(prev - 0.15).toFixed(2)))}
-                  style={{ width: '30px', height: '30px', borderRadius: '6px', border: '1px solid #8a6d3b', background: '#1c120c', color: '#d4af37', cursor: 'pointer', fontWeight: 'bold' }}
-                  title="Alejar Zoom"
-                >➖</button>
-                <span className="vtt-gothic-title" style={{ minWidth: '52px', textAlign: 'center', fontSize: '13px', fontWeight: 'bold', color: '#f3e5ab' }}>
-                  {Math.round(scale * 100)}%
-                </span>
-                <button
-                  onClick={() => setScale(prev => Math.min(5, +(prev + 0.15).toFixed(2)))}
-                  style={{ width: '30px', height: '30px', borderRadius: '6px', border: '1px solid #8a6d3b', background: '#1c120c', color: '#d4af37', cursor: 'pointer', fontWeight: 'bold' }}
-                  title="Acercar Zoom"
-                >➕</button>
-              </div>
+          <button
+            onClick={() => { setRulerActive(!rulerActive); setPingActive(false); }}
+            className="vtt-brass-btn"
+            style={{
+              padding: '8px 14px', borderRadius: '8px', cursor: 'pointer', fontSize: '13px', fontWeight: 'bold',
+              borderColor: rulerActive ? '#fbbf24' : '#8a6d3b', background: rulerActive ? '#92400e' : undefined
+            }}
+            title="Medir distancia en casillas y metros"
+          >
+            Regla de Medición
+          </button>
 
-              <div style={{ width: '1px', height: '22px', backgroundColor: '#6b4c2b' }} />
+          <button
+            onClick={() => { setPingActive(!pingActive); setRulerActive(false); }}
+            className="vtt-brass-btn"
+            style={{
+              padding: '8px 14px', borderRadius: '8px', cursor: 'pointer', fontSize: '13px', fontWeight: 'bold',
+              borderColor: pingActive ? '#fbbf24' : '#8a6d3b', background: pingActive ? '#92400e' : undefined
+            }}
+            title="Señalar un punto de atención"
+          >
+            Señal / Ping
+          </button>
+          
+          <div style={{ width: '1px', height: '24px', backgroundColor: '#6b4c2b' }}></div>
 
-              <button
-                onClick={() => { setPan({ x: 0, y: 0 }); setScale(1); }}
-                className="vtt-brass-btn"
-                style={{ padding: '6px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '5px' }}
-                title="Volver al centro del mapa y restaurar zoom al 100%"
-              >
-                🧭 Centrar
-              </button>
+          <select
+            value={weatherEffect}
+            onChange={(e) => setWeatherEffect(e.target.value)}
+            style={{
+              padding: '8px 12px', borderRadius: '8px', backgroundColor: '#120b07', color: '#f3e5ab',
+              border: '1px solid #8a6d3b', fontSize: '13px', fontFamily: "'Cinzel', serif", cursor: 'pointer'
+            }}
+            title="Clima en tiempo real"
+          >
+            <option value="none">Clima: Despejado</option>
+            <option value="rain">Lluvia</option>
+            <option value="storm">Tormenta</option>
+            <option value="snow">Nieve</option>
+            <option value="ash">Cenizas</option>
+            <option value="spores">Esporas</option>
+            <option value="mist">Niebla</option>
+          </select>
 
-              <button
-                onClick={() => {
-                  setRulerActive(!rulerActive);
-                  if (!rulerActive) setPingActive(false);
-                }}
-                style={{
-                  padding: '6px 12px',
-                  borderRadius: '6px',
-                  fontFamily: "'Cinzel', serif",
-                  border: rulerActive ? '1px solid #ffd700' : '1px solid #8a6d3b',
-                  background: rulerActive ? 'linear-gradient(180deg, #b45309 0%, #78350f 100%)' : 'linear-gradient(180deg, #3a2618 0%, #21150d 100%)',
-                  color: rulerActive ? '#fffbeb' : '#e6d5b8',
-                  cursor: 'pointer',
-                  fontSize: '12px',
-                  fontWeight: 'bold',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '5px'
-                }}
-                title="Medir distancias en el mapa (Atajo: Alt + Arrastrar)"
-              >
-                📏 Regla
-              </button>
+          <select
+            value={ambientTint}
+            onChange={(e) => setAmbientTint(e.target.value)}
+            style={{
+              padding: '8px 12px', borderRadius: '8px', backgroundColor: '#120b07', color: '#f3e5ab',
+              border: '1px solid #8a6d3b', fontSize: '13px', fontFamily: "'Cinzel', serif", cursor: 'pointer'
+            }}
+            title="Iluminación ambiental"
+          >
+            <option value="none">Luz: Natural</option>
+            <option value="torch">Antorcha</option>
+            <option value="night">Noche</option>
+            <option value="blood">Carmesí</option>
+            <option value="crypt">Cripta</option>
+          </select>
 
-              <button
-                onClick={() => {
-                  setPingActive(!pingActive);
-                  if (!pingActive) setRulerActive(false);
-                }}
-                style={{
-                  padding: '6px 12px',
-                  borderRadius: '6px',
-                  fontFamily: "'Cinzel', serif",
-                  border: pingActive ? '1px solid #f87171' : '1px solid #8a6d3b',
-                  background: pingActive ? 'linear-gradient(180deg, #991b1b 0%, #450a0a 100%)' : 'linear-gradient(180deg, #3a2618 0%, #21150d 100%)',
-                  color: '#e6d5b8',
-                  cursor: 'pointer',
-                  fontSize: '12px',
-                  fontWeight: 'bold',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '5px'
-                }}
-                title="Señalar un punto en el mapa (Atajo: Shift + Clic)"
-              >
-                🔔 Señalar
-              </button>
+          <div style={{ width: '1px', height: '24px', backgroundColor: '#6b4c2b' }}></div>
 
-              {!isPlayerView && (
-                <button
-                  onClick={() => setIsWeatherMenuOpen(!isWeatherMenuOpen)}
-                  style={{
-                    padding: '6px 12px',
-                    borderRadius: '6px',
-                    fontFamily: "'Cinzel', serif",
-                    border: (weatherEffect !== 'none' || ambientTint !== 'none' || isWeatherMenuOpen) ? '1px solid #fbbf24' : '1px solid #8a6d3b',
-                    background: (weatherEffect !== 'none' || ambientTint !== 'none' || isWeatherMenuOpen)
-                      ? 'linear-gradient(180deg, #b45309 0%, #78350f 100%)'
-                      : 'linear-gradient(180deg, #3a2618 0%, #21150d 100%)',
-                    color: '#e6d5b8',
-                    cursor: 'pointer',
-                    fontSize: '12px',
-                    fontWeight: 'bold',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '5px'
-                  }}
-                  title="Configurar Clima e Iluminación Ambiental"
-                >
-                  ⛈️ Clima
-                </button>
-              )}
+          <button
+            onClick={() => { setPan({ x: 0, y: 0 }); setScale(1); }}
+            className="vtt-brass-btn"
+            style={{ padding: '8px 14px', borderRadius: '8px', cursor: 'pointer', fontSize: '13px', fontWeight: 'bold' }}
+            title="Centrar Cámara al origen"
+          >
+            Centrar Cámara
+          </button>
 
-              <div style={{ width: '1px', height: '22px', backgroundColor: '#6b4c2b' }} />
+          <button
+            onClick={() => {
+              const nextSync = !syncPlayerCamera;
+              setSyncPlayerCamera(nextSync);
+              showMasterFeedback(nextSync ? 'Cámara vinculada' : 'Cámara libre');
+            }}
+            className="vtt-brass-btn"
+            style={{
+              padding: '8px 14px', borderRadius: '8px', cursor: 'pointer', fontSize: '13px', fontWeight: 'bold',
+              borderColor: syncPlayerCamera ? '#4ade80' : '#8a6d3b'
+            }}
+            title="Vincular el movimiento de cámara con los Jugadores"
+          >
+            Vincular Pantalla: {syncPlayerCamera ? 'ON' : 'OFF'}
+          </button>
 
-              <button
-                onClick={handleToggleFullscreen}
-                className="vtt-brass-btn"
-                style={{ padding: '6px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: 'bold' }}
-                title="Alternar Pantalla Completa"
-              >
-                ⛶ Pantalla
-              </button>
-
-              <button
-                onClick={() => setIsHudMinimized(true)}
-                style={{ background: 'transparent', border: 'none', color: '#c5a059', cursor: 'pointer', fontSize: '14px', padding: '4px' }}
-                title="Minimizar controles"
-              >
-                ✕
-              </button>
-            </>
-          ) : (
-            <button
-              onClick={() => setIsHudMinimized(false)}
-              className="vtt-gothic-title"
-              style={{ background: 'transparent', border: 'none', color: '#d4af37', cursor: 'pointer', fontSize: '13px', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '6px' }}
-              title="Mostrar herramientas de navegación y vista"
-            >
-              ⚜️ Controles de Cámara
-            </button>
-          )}
+          <button
+            onClick={() => setIsTutorialOpen(true)}
+            className="vtt-brass-btn"
+            style={{ padding: '8px 14px', borderRadius: '8px', cursor: 'pointer', fontSize: '13px', fontWeight: 'bold' }}
+            title="Abrir Guía"
+          >
+            Guía de Uso
+          </button>
         </div>
 
-        {!isPlayerView && (
-          <>
-            <Soundboard
-              onTriggerSound={handleTriggerSound}
-              onStopAllSounds={handleStopAllSounds}
-              activeLoops={activeSoundLoops}
-              masterToast={masterToast}
-            />
-            <DiceRoller />
-          </>
-        )}
+        <Soundboard
+          onTriggerSound={handleTriggerSound}
+          onStopAllSounds={handleStopAllSounds}
+          activeLoops={activeLoops}
+          masterToast={masterToast}
+          customSounds={customSounds}
+          onAddCustomSound={(snd) => {
+            setCustomSounds(prev => [...prev, snd]);
+            showMasterFeedback(`Sonido añadido: ${snd.label}`, snd.icon);
+          }}
+          onRemoveCustomSound={(id) => setCustomSounds(prev => prev.filter(s => s.id !== id))}
+        />
+
+        <DiceRoller />
       </div>
 
-      <input type="file" accept=".json" ref={campaignInputRef} style={{ display: 'none' }} onChange={handleImportCampaign} />
+      <SettingsDrawer
+        isOpen={isSettingsOpen}
+        onClose={() => setIsSettingsOpen(false)}
+        characters={characters}
+        onSaveCharacter={(newChar) => setCharacters(prev => [...prev, newChar])}
+        onImportCharacters={(imported) => setCharacters(prev => [...prev, ...imported])}
+        onAddToken={handleAddToken}
+        onRemoveCharacter={(id) => setCharacters(prev => prev.filter(c => c.id !== id))}
+        customStatuses={customStatuses}
+        onAddCustomStatus={(st) => setCustomStatuses(prev => [...prev, st])}
+        onRemoveCustomStatus={(id) => setCustomStatuses(prev => prev.filter(s => s.id !== id))}
+        onExportCampaign={handleExportCampaign}
+        onImportCampaign={() => campaignFileInputRef.current.click()}
+        fowEnabled={fowEnabled}
+        setFowEnabled={setFowEnabled}
+        fowBrushSize={fowBrushSize}
+        setFowBrushSize={setFowBrushSize}
+        fowVisionRadius={fowVisionRadius}
+        setFowVisionRadius={setFowVisionRadius}
+        fowMemoryEnabled={fowMemoryEnabled}
+        setFowMemoryEnabled={setFowMemoryEnabled}
+        fowAutoHideEnemies={fowAutoHideEnemies}
+        setFowAutoHideEnemies={setFowAutoHideEnemies}
+        onResetFow={() => {
+          setFowActions([]);
+          showMasterFeedback('Niebla de Guerra reiniciada');
+        }}
+        fowMode={fowMode}
+        setFowMode={setFowMode}
+        snapToGrid={snapToGrid}
+        setSnapToGrid={setSnapToGrid}
+        gridSize={gridSize}
+        setGridSize={setGridSize}
+        openMapCreator={() => setIsMapCreatorOpen(true)}
+        maps={maps}
+        onAddMapElement={(newEl) => {
+          const center = {
+            x: Math.round((-pan.x / scale + window.innerWidth / 3 / scale) / gridSize) * gridSize,
+            y: Math.round((-pan.y / scale + window.innerHeight / 2 / scale) / gridSize) * gridSize
+          };
+          setMaps(prev => [...prev, { ...newEl, x: center.x, y: center.y, zIndex: prev.length + 10 }]);
+        }}
+        onToggleMapElementState={(item) => {
+          if (item.type === 'door') handleToggleDoor(item.id);
+          else if (item.type === 'window') handleToggleWindow(item.id, false);
+          else if (item.type === 'object') handleToggleObject(item.id);
+          else if (item.type === 'light') handleToggleLight(item.id);
+        }}
+        onRemoveMapElement={(id) => setMaps(prev => prev.filter(el => el.id !== id))}
+        onClearAllMaps={() => setMaps([])}
+        scenes={scenes}
+        activeSceneId={activeSceneId}
+        onSelectScene={handleSelectScene}
+        onCreateNewScene={handleCreateNewScene}
+        onDeleteScene={handleDeleteScene}
+        handouts={handouts}
+        activeHandout={activeHandout}
+        onAddHandout={(h) => setHandouts(prev => [...prev, h])}
+        onRemoveHandout={(id) => {
+          setHandouts(prev => prev.filter(h => h.id !== id));
+          if (activeHandout && activeHandout.id === id) setActiveHandout(null);
+        }}
+        onProjectHandout={(h) => {
+          setActiveHandout(h);
+          if (h) showMasterFeedback(`Proyectando: ${h.title}`, '🖼️');
+          else showMasterFeedback('Proyección retirada');
+        }}
+      />
 
-      {!isPlayerView && isSettingsModalOpen && (
-        <SettingsModal 
-          onClose={() => setIsSettingsModalOpen(false)}
-          characters={characters} onSaveCharacter={(c) => setCharacters([...characters, c])}
-          onImportCharacters={(newChars) => setCharacters([...characters, ...newChars])}
-          customStatuses={customStatuses} onAddCustomStatus={(s) => setCustomStatuses([...customStatuses, s])}
-          onRemoveCustomStatus={(id) => setCustomStatuses(customStatuses.filter(s => s.id !== id))}
-          onExportCampaign={() => {
-            const blob = new Blob([JSON.stringify({ maps, tokens, fowActions, customStatuses, characters })], { type: 'application/json' });
-            const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'partida_vtt.json'; a.click();
-          }} 
-          onImportCampaign={() => campaignInputRef.current.click()}
-          fowEnabled={fowEnabled} setFowEnabled={setFowEnabled}
-          fowBrushSize={fowBrushSize} setFowBrushSize={setFowBrushSize}
-          fowVisionRadius={fowVisionRadius} setFowVisionRadius={setFowVisionRadius}
-          fowMemoryEnabled={fowMemoryEnabled} setFowMemoryEnabled={setFowMemoryEnabled}
-          fowAutoHideEnemies={fowAutoHideEnemies} setFowAutoHideEnemies={setFowAutoHideEnemies}
-          onResetFow={() => { lastFowTrailRef.current = {}; setFowActions([]); }}
-          fowMode={fowMode} setFowMode={setFowMode}
-          snapToGrid={snapToGrid} setSnapToGrid={setSnapToGrid} gridSize={gridSize} setGridSize={handleGridSizeChange}
-          maps={maps} onLoadMapToBoard={(newMaps) => { setMaps(newMaps); setIsSettingsModalOpen(false); }}
-        />
-      )}
+      <TutorialModal
+        isOpen={isTutorialOpen}
+        onClose={() => setIsTutorialOpen(false)}
+        onNeverShowAgain={() => setHideTutorialPermanently(true)}
+      />
     </div>
   );
-};
+}
 
 export default App;

@@ -32,7 +32,7 @@ const TokenSidebar = ({
         boxShadow: 'inset 0 -1px 0 rgba(212, 175, 55, 0.25)'
       }}>
         <h2 className="vtt-gothic-title" style={{ margin: 0, fontSize: '17px', fontWeight: 'bold', color: '#d4af37' }}>
-          📜 Crónicas de Campaña
+          Crónicas de Campaña
         </h2>
       </div>
 
@@ -51,7 +51,7 @@ const TokenSidebar = ({
           }}
         >
           <h3 className="vtt-gothic-title" style={{ margin: 0, fontSize: '13px', color: '#c5a059', userSelect: 'none' }}>
-            ⚜️ Dramatis Personae
+            Dramatis Personae
           </h3>
           <span style={{ fontSize: '12px', color: '#d4af37', transition: 'transform 0.2s', transform: isCharactersExpanded ? 'rotate(90deg)' : 'rotate(0deg)' }}>
             ▶
@@ -97,14 +97,14 @@ const TokenSidebar = ({
                     style={{ borderRadius: '4px', padding: '4px 8px', cursor: 'pointer', fontSize: '11px', fontWeight: 'bold' }}
                     title="Invocar en el tablero"
                   >
-                    Invocar ➔
+                    Invocar
                   </button>
                   <button 
                     onClick={() => onRemoveCharacter(char.id)} 
-                    style={{ backgroundColor: 'transparent', border: 'none', color: '#ef4444', borderRadius: '4px', padding: '4px', cursor: 'pointer', fontSize: '14px' }}
+                    style={{ backgroundColor: 'transparent', border: 'none', color: '#ef4444', borderRadius: '4px', padding: '4px', cursor: 'pointer', fontSize: '12px', fontWeight: 'bold' }}
                     title="Eliminar personaje"
                   >
-                    🗑️
+                    X
                   </button>
                 </div>
               </div>
@@ -120,7 +120,7 @@ const TokenSidebar = ({
 
       <div style={{ padding: '18px', flex: 1, overflowY: 'auto' }}>
         <h3 className="vtt-gothic-title" style={{ margin: '0 0 12px 0', fontSize: '13px', color: '#c5a059' }}>
-          ⚔️ En Escena ({tokens.length})
+          En Escena ({tokens.length})
         </h3>
         
         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
@@ -156,55 +156,62 @@ const TokenSidebar = ({
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column' }}>
                     <span style={{ fontSize: '15px', fontWeight: 'bold', color: '#f3e5ab' }}>
-                      {token.isHidden ? '👻 ' : ''}{token.name}
+                      {token.isHidden ? '[Oculto] ' : ''}{token.name}
                     </span>
                     <span style={{ fontSize: '11px', color: '#b89f7d' }}>
-                      {token.faction === 'enemy' ? '💀 Enemigo' : (token.visionMode === 'circle' ? '🕯️ 360º' : '🔦 Cono')} • {Math.round(token.rotation || 0)}º
+                      {token.faction === 'enemy' ? 'Enemigo' : (token.visionMode === 'circle' ? 'Visión 360º' : 'Cono')} • {Math.round(token.rotation || 0)}º
                     </span>
                   </div>
                 </div>
 
-                <div style={{ display: 'flex', gap: '3px', alignItems: 'center' }}>
+                <div style={{ display: 'flex', gap: '4px', alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                  <button
+                    onClick={() => onToggleTokenName && onToggleTokenName(token.id)}
+                    style={{
+                      backgroundColor: 'transparent',
+                      border: '1px solid #6b4c2b',
+                      borderRadius: '4px',
+                      color: token.showName !== false ? '#fbbf24' : '#b89f7d',
+                      opacity: token.showName !== false ? 1 : 0.45,
+                      cursor: 'pointer',
+                      fontSize: '11px',
+                      padding: '3px 6px',
+                      fontWeight: 'bold'
+                    }}
+                    title={token.showName !== false ? 'Nombre visible en el mapa (Clic para ocultar nombre)' : 'Nombre oculto en el mapa (Clic para mostrar nombre)'}
+                  >
+                    {token.showName !== false ? 'Nombre' : 'Sin Nombre'}
+                  </button>
                   <button
                     onClick={() => onToggleTokenFaction && onToggleTokenFaction(token.id)}
                     style={{
-                      backgroundColor: 'transparent', border: 'none',
-                      cursor: 'pointer', fontSize: '14px', padding: '3px'
+                      backgroundColor: 'transparent', border: '1px solid #6b4c2b', borderRadius: '4px', color: token.faction === 'enemy' ? '#f87171' : '#60a5fa',
+                      cursor: 'pointer', fontSize: '11px', padding: '3px 6px', fontWeight: 'bold'
                     }}
                     title={token.faction === 'enemy' ? 'Enemigo (Clic para cambiar a Aliado)' : 'Aliado (Clic para cambiar a Enemigo)'}
                   >
-                    {token.faction === 'enemy' ? '💀' : '🛡️'}
+                    {token.faction === 'enemy' ? 'Enemigo' : 'Aliado'}
                   </button>
                   <button
                     onClick={() => onToggleTokenHidden && onToggleTokenHidden(token.id)}
                     style={{
-                      backgroundColor: 'transparent', border: 'none',
+                      backgroundColor: 'transparent', border: '1px solid #6b4c2b', borderRadius: '4px', color: token.isHidden ? '#c084fc' : '#e6d5b8',
                       opacity: token.isHidden ? 1 : 0.45,
-                      cursor: 'pointer', fontSize: '14px', padding: '3px'
+                      cursor: 'pointer', fontSize: '11px', padding: '3px 6px', fontWeight: 'bold'
                     }}
                     title={token.isHidden ? 'En Sigilo: Oculto a los jugadores (Clic para revelar)' : 'Visible (Clic para ocultar en sigilo)'}
                   >
-                    👻
-                  </button>
-                  <button 
-                    onClick={() => onToggleTokenName(token.id)}
-                    style={{
-                      backgroundColor: 'transparent', border: 'none', color: token.showName === false ? '#6b4c2b' : '#d4af37', 
-                      cursor: 'pointer', fontSize: '15px', padding: '3px'
-                    }}
-                    title={token.showName === false ? "Mostrar nombre" : "Ocultar nombre"}
-                  >
-                    {token.showName === false ? '👁️‍🗨️' : '👁️'}
+                    {token.isHidden ? 'Oculto' : 'Visible'}
                   </button>
                   <button 
                     onClick={() => onRemoveToken(token.id)}
                     style={{
                       backgroundColor: 'transparent', border: 'none', color: '#ef4444', 
-                      cursor: 'pointer', fontSize: '15px', padding: '3px'
+                      cursor: 'pointer', fontSize: '12px', padding: '3px 6px', fontWeight: 'bold'
                     }}
                     title="Retirar de la mesa"
                   >
-                    🗑️
+                    X
                   </button>
                 </div>
               </div>

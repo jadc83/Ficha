@@ -1,0 +1,14 @@
+{
+"$schema": "../gen/schemas/desktop-schema.json",
+"identifier": "default",
+"description": "Permisos para abrir y sincronizar la Pantalla de Jugadores secundaria en Grimorio VTT",
+"windows": ["main", "player"],
+"permissions": [
+"core:default",
+"core:event:default",
+"core:webview:allow-create-webview-window",
+"core:window:allow-show",
+"core:window:allow-set-focus",
+"core:window:allow-close"
+]
+}
